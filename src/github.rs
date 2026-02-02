@@ -1,11 +1,33 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+use serde::{Deserialize, Serialize};
+
 /// Cache for GitHub owner validation results
 #[derive(Default)]
 pub struct GitHubCache {
     /// Map from owner string to validation result (true = valid, false = invalid)
     pub validated: HashMap<String, bool>,
+}
+
+/// Persistent cache for GitHub data (saved to .codeowners-lsp.cache.json)
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PersistentCache {
+    /// Cached teams by org: org -> list of team slugs
+    #[serde(default)]
+    pub teams: HashMap<String, Vec<String>>,
+    /// Cached users (from CODEOWNERS file)
+    #[serde(default)]
+    pub users: Vec<String>,
+    /// Last fetch timestamp (Unix seconds)
+    #[serde(default)]
+    pub last_updated: u64,
+}
+
+/// Team info from GitHub API
+#[derive(Debug, Deserialize)]
+struct GitHubTeam {
+    slug: String,
 }
 
 /// GitHub API client for validating owners
