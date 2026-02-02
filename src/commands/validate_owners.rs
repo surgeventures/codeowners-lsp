@@ -1,12 +1,24 @@
 use std::collections::HashSet;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::{env, fs};
 
 use colored::Colorize;
+use futures::stream::{self, StreamExt};
+use indicatif::{ProgressBar, ProgressStyle};
 
 use crate::github::GitHubClient;
 use crate::ownership::find_codeowners;
 use crate::parser::{parse_codeowners_file_with_positions, CodeownersLine};
+
+const CONCURRENCY: usize = 5;
+
+#[derive(Debug)]
+enum ValidationResult {
+    Valid(String),
+    Invalid(String),
+    Unknown(String, &'static str),
+}
 
 pub async fn validate_owners(token: &str) -> ExitCode {
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -48,62 +60,99 @@ pub async fn validate_owners(token: &str) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    println!(
-        "Validating {} unique owners against GitHub...\n",
-        owners.len().to_string().cyan()
-    );
-
-    let client = GitHubClient::new();
-    let mut valid_count = 0;
-    let mut invalid_count = 0;
-    let mut unknown_count = 0;
-
     // Sort for consistent output
     let mut owners_vec: Vec<_> = owners.into_iter().collect();
     owners_vec.sort();
 
-    for owner in &owners_vec {
-        let result = client.validate_owner(owner, token).await;
+    let total = owners_vec.len();
+    println!(
+        "Validating {} unique owners against GitHub...\n",
+        total.to_string().cyan()
+    );
 
+    // Progress bar
+    let pb = ProgressBar::new(total as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .unwrap()
+            .progress_chars("━╸─"),
+    );
+
+    let client = Arc::new(GitHubClient::new());
+    let token = token.to_string();
+
+    // Validate in parallel with concurrency limit
+    let results: Vec<ValidationResult> = stream::iter(owners_vec)
+        .map(|owner| {
+            let client = Arc::clone(&client);
+            let token = token.clone();
+            let pb = pb.clone();
+            async move {
+                let result = validate_single(&client, &owner, &token).await;
+                pb.inc(1);
+                result
+            }
+        })
+        .buffer_unordered(CONCURRENCY)
+        .collect()
+        .await;
+
+    pb.finish_and_clear();
+
+    // Sort results for display
+    let mut valid: Vec<&str> = Vec::new();
+    let mut invalid: Vec<&str> = Vec::new();
+    let mut unknown: Vec<(&str, &str)> = Vec::new();
+
+    for result in &results {
         match result {
-            Some(true) => {
-                println!("  {} {}", "✓".green(), owner);
-                valid_count += 1;
-            }
-            Some(false) => {
-                println!("  {} {} {}", "✗".red(), owner, "(not found)".dimmed());
-                invalid_count += 1;
-            }
-            None => {
-                // Email or couldn't validate (403 permission)
-                if owner.contains('@') && !owner.starts_with('@') {
-                    println!(
-                        "  {} {} {}",
-                        "?".yellow(),
-                        owner,
-                        "(email, can't validate)".dimmed()
-                    );
-                } else {
-                    println!(
-                        "  {} {} {}",
-                        "?".yellow(),
-                        owner,
-                        "(couldn't validate - check permissions)".dimmed()
-                    );
-                }
-                unknown_count += 1;
-            }
+            ValidationResult::Valid(owner) => valid.push(owner),
+            ValidationResult::Invalid(owner) => invalid.push(owner),
+            ValidationResult::Unknown(owner, reason) => unknown.push((owner, reason)),
         }
     }
 
-    println!("\n{}:", "Summary".bold());
-    println!("  {} {}", "Valid:".green(), valid_count);
-    println!("  {} {}", "Invalid:".red(), invalid_count);
-    println!("  {} {}", "Unknown:".yellow(), unknown_count);
+    valid.sort();
+    invalid.sort();
+    unknown.sort_by_key(|(o, _)| *o);
 
-    if invalid_count > 0 {
+    // Print results
+    for owner in &valid {
+        println!("  {} {}", "✓".green(), owner);
+    }
+    for owner in &invalid {
+        println!("  {} {} {}", "✗".red(), owner, "(not found)".dimmed());
+    }
+    for (owner, reason) in &unknown {
+        println!("  {} {} {}", "?".yellow(), owner, reason.dimmed());
+    }
+
+    println!("\n{}:", "Summary".bold());
+    println!("  {} {}", "Valid:".green(), valid.len());
+    println!("  {} {}", "Invalid:".red(), invalid.len());
+    println!("  {} {}", "Unknown:".yellow(), unknown.len());
+
+    if !invalid.is_empty() {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+async fn validate_single(client: &GitHubClient, owner: &str, token: &str) -> ValidationResult {
+    let result = client.validate_owner(owner, token).await;
+
+    match result {
+        Some(true) => ValidationResult::Valid(owner.to_string()),
+        Some(false) => ValidationResult::Invalid(owner.to_string()),
+        None => {
+            let reason = if owner.contains('@') && !owner.starts_with('@') {
+                "(email, can't validate)"
+            } else {
+                "(couldn't validate - check permissions)"
+            };
+            ValidationResult::Unknown(owner.to_string(), reason)
+        }
     }
 }
