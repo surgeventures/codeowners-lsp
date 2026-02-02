@@ -124,7 +124,11 @@ impl Backend {
         let owners = codeowners.of(relative_path)?;
         let owner_strs: Vec<String> = owners.iter().map(|o| o.to_string()).collect();
 
-        Some(owner_strs.join(" "))
+        if owner_strs.is_empty() {
+            None
+        } else {
+            Some(owner_strs.join(" "))
+        }
     }
 
     /// Compute diagnostics for the CODEOWNERS file
@@ -685,20 +689,21 @@ impl LanguageServer for Backend {
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let Some(owners) = self.get_owners_for_file(uri) else {
-            return Ok(None);
-        };
-
-        let owner_list: Vec<&str> = owners.split_whitespace().collect();
-        let formatted = if owner_list.len() == 1 {
-            format!("**Owner:** `{}`", owner_list[0])
-        } else {
-            let list = owner_list
-                .iter()
-                .map(|o| format!("- `{}`", o))
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("**Owners:**\n{}", list)
+        let formatted = match self.get_owners_for_file(uri) {
+            None => "**Owned by nobody**".to_string(),
+            Some(owners) => {
+                let owner_list: Vec<&str> = owners.split_whitespace().collect();
+                if owner_list.len() == 1 {
+                    format!("**Owner:** `{}`", owner_list[0])
+                } else {
+                    let list = owner_list
+                        .iter()
+                        .map(|o| format!("- `{}`", o))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!("**Owners:**\n{}", list)
+                }
+            }
         };
 
         Ok(Some(Hover {
@@ -951,8 +956,15 @@ impl LanguageServer for Backend {
         }
 
         // For other files, show ownership info
-        let Some(owners) = self.get_owners_for_file(uri) else {
-            return Ok(None);
+        let (label, tooltip) = match self.get_owners_for_file(uri) {
+            Some(owners) => (
+                format!("Owned by: {}", owners),
+                "File ownership from CODEOWNERS".to_string(),
+            ),
+            None => (
+                "Owned by nobody".to_string(),
+                "No CODEOWNERS rule matches this file".to_string(),
+            ),
         };
 
         Ok(Some(vec![InlayHint {
@@ -960,12 +972,10 @@ impl LanguageServer for Backend {
                 line: 0,
                 character: 0,
             },
-            label: InlayHintLabel::String(format!("Owned by: {}", owners)),
+            label: InlayHintLabel::String(label),
             kind: None,
             text_edits: None,
-            tooltip: Some(InlayHintTooltip::String(
-                "File ownership from CODEOWNERS".to_string(),
-            )),
+            tooltip: Some(InlayHintTooltip::String(tooltip)),
             padding_left: Some(false),
             padding_right: Some(true),
             data: None,
