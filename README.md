@@ -16,6 +16,7 @@ codeowners-cli check src/main.rs
 codeowners-cli coverage
 
 # Suggest owners for unowned files (based on git history)
+# NOTE: Experimental - suggestions based on commit frequency, review before using
 codeowners-cli suggest                          # Human-readable suggestions
 codeowners-cli suggest --format codeowners      # Ready-to-paste CODEOWNERS lines
 codeowners-cli suggest --min-confidence 50      # Higher confidence threshold
@@ -216,7 +217,7 @@ JSON settings can also be passed via LSP init options (these override TOML confi
 | Linked editing (multi-cursor owners)  | ✅     |
 | Pattern hover (show matches)          | ✅     |
 | Related diagnostics (shadowed links)  | ✅     |
-| CLI: suggest (git-based suggestions)  | ✅     |
+| CLI: suggest (git-based suggestions)  | ⚠️ experimental |
 | CLI: optimize (pattern consolidation) | ✅     |
 
 ## License
