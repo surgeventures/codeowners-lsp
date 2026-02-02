@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-02-02
+
+### Changed
+
+- Improved hover formatting: single owner shows inline, multiple owners display as a markdown list with code formatting
+
 ## [0.2.0] - 2026-02-02
 
 ### Added

@@ -334,10 +334,22 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
+        let owner_list: Vec<&str> = owners.split_whitespace().collect();
+        let formatted = if owner_list.len() == 1 {
+            format!("**Owner:** `{}`", owner_list[0])
+        } else {
+            let list = owner_list
+                .iter()
+                .map(|o| format!("- `{}`", o))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("**Owners:**\n{}", list)
+        };
+
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value: format!("**CODEOWNERS:** {}", owners),
+                value: formatted,
             }),
             range: None,
         }))
