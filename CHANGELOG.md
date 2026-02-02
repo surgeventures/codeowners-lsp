@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.2] - 2026-02-02
+
+### Fixed
+
+- Fixed trailing comma on owner names in hover list when multiple owners exist
+
 ## [0.2.1] - 2026-02-02
 
 ### Changed

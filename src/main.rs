@@ -148,7 +148,7 @@ impl Backend {
         let owners = codeowners.of(relative_path)?;
         let owner_strs: Vec<String> = owners.iter().map(|o| o.to_string()).collect();
 
-        Some(owner_strs.join(", "))
+        Some(owner_strs.join(" "))
     }
 
     /// Add a new ownership entry to the CODEOWNERS file
