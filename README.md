@@ -18,7 +18,10 @@ codeowners-cli coverage
 # Format CODEOWNERS file
 codeowners-cli fmt                    # Prints formatted output
 codeowners-cli fmt --write            # Writes in place
-codeowners-cli fmt --check            # Check if formatted (for CI)
+
+# Auto-fix safe issues
+codeowners-cli fix                    # Preview fixes
+codeowners-cli fix --write            # Apply fixes
 ```
 
 ## LSP Features
@@ -113,7 +116,7 @@ The LSP finds CODEOWNERS in standard locations: `.github/CODEOWNERS`, `CODEOWNER
 | Code actions: remove duplicate owners | ✅     |
 | Code actions: add owner               | ✅     |
 | Code actions: add catch-all           | ✅     |
-| Auto-fix lint issues                  | 🔜     |
+| CLI: fix (auto-fix safe issues)       | ✅     |
 
 ## License
 

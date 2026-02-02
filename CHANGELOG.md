@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.2] - 2026-02-02
+
+### Added
+
+- **`fix` command** in CLI - auto-fix safe issues (duplicate owners, shadowed rules)
+
+### Changed
+
+- `no-owners` diagnostic is now a hint (not a warning) - often intentional for opt-out
+
 ## [0.4.1] - 2026-02-02
 
 ### Changed

@@ -202,6 +202,7 @@ pub fn compute_diagnostics_sync(
 
             // Check for rules without owners
             if owners.is_empty() {
+                // This is often intentional (opt-out of ownership), so just a hint
                 diagnostics.push(Diagnostic {
                     range: Range {
                         start: Position {
@@ -213,12 +214,10 @@ pub fn compute_diagnostics_sync(
                             character: parsed_line.pattern_end,
                         },
                     },
-                    severity: Some(DiagnosticSeverity::WARNING),
+                    severity: Some(DiagnosticSeverity::HINT),
                     code: Some(NumberOrString::String(codes::NO_OWNERS.to_string())),
                     source: Some("codeowners".to_string()),
-                    message:
-                        "Rule has no owners - files matching this pattern will have no code owners"
-                            .to_string(),
+                    message: "No owners specified (files will have no code owners)".to_string(),
                     ..Default::default()
                 });
             }
@@ -399,8 +398,8 @@ mod tests {
         let (diagnostics, _) = compute_diagnostics_sync(content, None);
 
         assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::WARNING));
-        assert!(diagnostics[0].message.contains("no owners"));
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::HINT));
+        assert!(diagnostics[0].message.contains("No owners"));
     }
 
     #[test]

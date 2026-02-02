@@ -289,7 +289,7 @@ impl Backend {
             }
 
             // Handle "no owners" diagnostics - offer to add configured owners
-            if diagnostic.message.contains("Rule has no owners") && line_num < lines.len() {
+            if diagnostic.message.contains("No owners specified") && line_num < lines.len() {
                 let line = lines[line_num];
                 let pattern = line.split_whitespace().next().unwrap_or("");
                 let settings = self.settings.read().unwrap();

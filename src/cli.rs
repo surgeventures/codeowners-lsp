@@ -402,6 +402,148 @@ fn format_codeowners(content: &str) -> String {
     output
 }
 
+/// Auto-fix safe issues in CODEOWNERS file
+fn fix_codeowners(path: Option<&str>, write: bool) -> ExitCode {
+    let cwd = env::current_dir().expect("Failed to get current directory");
+
+    let codeowners_path = if let Some(p) = path {
+        PathBuf::from(p)
+    } else {
+        match find_codeowners(&cwd) {
+            Some(p) => p,
+            None => {
+                eprintln!("No CODEOWNERS file found");
+                return ExitCode::from(1);
+            }
+        }
+    };
+
+    if !codeowners_path.exists() {
+        eprintln!("File not found: {}", codeowners_path.display());
+        return ExitCode::from(1);
+    }
+
+    let content = match fs::read_to_string(&codeowners_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to read {}: {}", codeowners_path.display(), e);
+            return ExitCode::from(1);
+        }
+    };
+
+    let (fixed, fixes_applied) = apply_safe_fixes(&content);
+
+    if fixes_applied.is_empty() {
+        println!("✓ {} - no fixable issues", codeowners_path.display());
+        return ExitCode::SUCCESS;
+    }
+
+    if write {
+        match fs::write(&codeowners_path, &fixed) {
+            Ok(_) => {
+                println!(
+                    "✓ Fixed {} ({} changes):",
+                    codeowners_path.display(),
+                    fixes_applied.len()
+                );
+                for fix in &fixes_applied {
+                    println!("  - {}", fix);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("Failed to write {}: {}", codeowners_path.display(), e);
+                ExitCode::from(1)
+            }
+        }
+    } else {
+        println!(
+            "Would fix {} ({} changes):",
+            codeowners_path.display(),
+            fixes_applied.len()
+        );
+        for fix in &fixes_applied {
+            println!("  - {}", fix);
+        }
+        println!("\nRun with --write or -w to apply fixes");
+        ExitCode::from(1)
+    }
+}
+
+/// Apply safe fixes to CODEOWNERS content.
+/// Returns (fixed_content, list_of_fixes_applied)
+fn apply_safe_fixes(content: &str) -> (String, Vec<String>) {
+    use std::collections::HashSet;
+
+    let lines = parser::parse_codeowners_file_with_positions(content);
+    let original_lines: Vec<&str> = content.lines().collect();
+
+    let mut fixes = Vec::new();
+    let mut lines_to_delete: HashSet<usize> = HashSet::new();
+    let mut line_replacements: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
+
+    // Track patterns for shadowed rule detection
+    let mut exact_patterns: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for parsed_line in &lines {
+        if let parser::CodeownersLine::Rule { pattern, owners } = &parsed_line.content {
+            let line_num = parsed_line.line_number as usize;
+            let normalized_pattern = pattern.trim_start_matches('/');
+
+            // Fix 1: Remove duplicate owners
+            let mut seen_owners: HashSet<&str> = HashSet::new();
+            let deduped: Vec<&str> = owners
+                .iter()
+                .map(|s| s.as_str())
+                .filter(|o| seen_owners.insert(*o))
+                .collect();
+
+            if deduped.len() < owners.len() {
+                let new_line = if deduped.is_empty() {
+                    pattern.clone()
+                } else {
+                    format!("{} {}", pattern, deduped.join(" "))
+                };
+                line_replacements.insert(line_num, new_line);
+                fixes.push(format!("line {}: removed duplicate owners", line_num + 1));
+            }
+
+            // Fix 2: Remove shadowed rules (exact duplicates)
+            if let Some(&prev_line) = exact_patterns.get(normalized_pattern) {
+                lines_to_delete.insert(prev_line);
+                fixes.push(format!(
+                    "line {}: removed shadowed rule (duplicated on line {})",
+                    prev_line + 1,
+                    line_num + 1
+                ));
+            }
+            exact_patterns.insert(normalized_pattern.to_string(), line_num);
+        }
+    }
+
+    // Build the fixed content
+    let mut result = Vec::new();
+    for (i, line) in original_lines.iter().enumerate() {
+        if lines_to_delete.contains(&i) {
+            continue; // Skip deleted lines
+        }
+        if let Some(replacement) = line_replacements.get(&i) {
+            result.push(replacement.clone());
+        } else {
+            result.push(line.to_string());
+        }
+    }
+
+    let mut output = result.join("\n");
+    if !content.is_empty() && content.ends_with('\n') && !output.ends_with('\n') {
+        output.push('\n');
+    }
+
+    (output, fixes)
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
@@ -454,6 +596,27 @@ fn main() -> ExitCode {
             }
 
             fmt_codeowners(path, write)
+        }
+        "fix" => {
+            let mut path = None;
+            let mut write = false;
+
+            for arg in &args[2..] {
+                match arg.as_str() {
+                    "--write" | "-w" => write = true,
+                    "--help" | "-h" => {
+                        print_usage();
+                        return ExitCode::SUCCESS;
+                    }
+                    _ if !arg.starts_with('-') => path = Some(arg.as_str()),
+                    _ => {
+                        eprintln!("Unknown option: {}", arg);
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+
+            fix_codeowners(path, write)
         }
         "check" => {
             if args.len() < 3 {
