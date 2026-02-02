@@ -3,6 +3,7 @@ mod diagnostics;
 mod file_cache;
 #[allow(dead_code)]
 mod github;
+mod ownership;
 mod parser;
 mod pattern;
 #[allow(dead_code)]
@@ -13,6 +14,8 @@ use std::process::ExitCode;
 use std::{env, fs};
 
 use file_cache::FileCache;
+use ownership::{apply_safe_fixes, check_file_ownership, find_codeowners, get_repo_root};
+use parser::format_codeowners;
 
 fn print_usage() {
     eprintln!(
@@ -46,10 +49,6 @@ EXAMPLES:
     );
 }
 
-fn find_codeowners(start: &PathBuf) -> Option<PathBuf> {
-    codeowners::locate(start)
-}
-
 fn lint(path: Option<&str>, json_output: bool) -> ExitCode {
     let cwd = env::current_dir().expect("Failed to get current directory");
 
@@ -78,19 +77,8 @@ fn lint(path: Option<&str>, json_output: bool) -> ExitCode {
         }
     };
 
-    // Get repo root (parent of .github or location of CODEOWNERS)
-    let repo_root = codeowners_path
-        .parent()
-        .and_then(|p| {
-            if p.ends_with(".github") {
-                p.parent()
-            } else {
-                Some(p)
-            }
-        })
-        .unwrap_or(&cwd);
-
-    let file_cache = FileCache::new(&repo_root.to_path_buf());
+    let repo_root = get_repo_root(&codeowners_path, &cwd);
+    let file_cache = FileCache::new(&repo_root);
     let (diagnostics, _) = diagnostics::compute_diagnostics_sync(&content, Some(&file_cache));
 
     if json_output {
@@ -179,26 +167,11 @@ fn check_file(file_path: &str) -> ExitCode {
         }
     };
 
-    let lines = parser::parse_codeowners_file_with_positions(&content);
-
-    // Normalize file path
-    let file_path = file_path.trim_start_matches("./");
-
-    // Find matching rule (last match wins)
-    let mut matching_rule = None;
-    for parsed_line in &lines {
-        if let parser::CodeownersLine::Rule { pattern, owners } = &parsed_line.content {
-            if pattern::pattern_matches(pattern, file_path) {
-                matching_rule = Some((parsed_line.line_number, pattern.clone(), owners.clone()));
-            }
-        }
-    }
-
-    match matching_rule {
-        Some((line, pattern, owners)) => {
+    match check_file_ownership(&content, file_path) {
+        Some(result) => {
             println!("File: {}", file_path);
-            println!("Rule: {} (line {})", pattern, line + 1);
-            println!("Owners: {}", owners.join(" "));
+            println!("Rule: {} (line {})", result.pattern, result.line_number + 1);
+            println!("Owners: {}", result.owners.join(" "));
             ExitCode::SUCCESS
         }
         None => {
@@ -228,19 +201,8 @@ fn coverage() -> ExitCode {
         }
     };
 
-    // Get repo root
-    let repo_root = codeowners_path
-        .parent()
-        .and_then(|p| {
-            if p.ends_with(".github") {
-                p.parent()
-            } else {
-                Some(p)
-            }
-        })
-        .unwrap_or(&cwd);
-
-    let file_cache = FileCache::new(&repo_root.to_path_buf());
+    let repo_root = get_repo_root(&codeowners_path, &cwd);
+    let file_cache = FileCache::new(&repo_root);
     let lines = parser::parse_codeowners_file_with_positions(&content);
     let unowned = file_cache.get_unowned_files(&lines);
 
@@ -347,62 +309,6 @@ fn fmt_codeowners(path: Option<&str>, write: bool) -> ExitCode {
     }
 }
 
-/// Format a CODEOWNERS file content
-fn format_codeowners(content: &str) -> String {
-    let mut result = Vec::new();
-    let mut prev_was_empty = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        // Preserve blank lines but collapse multiple
-        if trimmed.is_empty() {
-            if !prev_was_empty && !result.is_empty() {
-                result.push(String::new());
-            }
-            prev_was_empty = true;
-            continue;
-        }
-        prev_was_empty = false;
-
-        // Comments: normalize to single space after #
-        if let Some(comment_text) = trimmed.strip_prefix('#') {
-            let comment_text = comment_text.trim();
-            if comment_text.is_empty() {
-                result.push("#".to_string());
-            } else {
-                result.push(format!("# {}", comment_text));
-            }
-            continue;
-        }
-
-        // Rules: normalize spacing between pattern and owners
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.is_empty() {
-            continue;
-        }
-
-        let pattern = parts[0];
-        let owners = &parts[1..];
-
-        if owners.is_empty() {
-            // No owners - just the pattern
-            result.push(pattern.to_string());
-        } else {
-            // Pattern + owners with single space
-            result.push(format!("{} {}", pattern, owners.join(" ")));
-        }
-    }
-
-    // Ensure trailing newline
-    let mut output = result.join("\n");
-    if !output.is_empty() && !output.ends_with('\n') {
-        output.push('\n');
-    }
-    output
-}
-
-/// Auto-fix safe issues in CODEOWNERS file
 fn fix_codeowners(path: Option<&str>, write: bool) -> ExitCode {
     let cwd = env::current_dir().expect("Failed to get current directory");
 
@@ -431,22 +337,22 @@ fn fix_codeowners(path: Option<&str>, write: bool) -> ExitCode {
         }
     };
 
-    let (fixed, fixes_applied) = apply_safe_fixes(&content);
+    let result = apply_safe_fixes(&content);
 
-    if fixes_applied.is_empty() {
+    if result.fixes.is_empty() {
         println!("✓ {} - no fixable issues", codeowners_path.display());
         return ExitCode::SUCCESS;
     }
 
     if write {
-        match fs::write(&codeowners_path, &fixed) {
+        match fs::write(&codeowners_path, &result.content) {
             Ok(_) => {
                 println!(
                     "✓ Fixed {} ({} changes):",
                     codeowners_path.display(),
-                    fixes_applied.len()
+                    result.fixes.len()
                 );
-                for fix in &fixes_applied {
+                for fix in &result.fixes {
                     println!("  - {}", fix);
                 }
                 ExitCode::SUCCESS
@@ -460,88 +366,14 @@ fn fix_codeowners(path: Option<&str>, write: bool) -> ExitCode {
         println!(
             "Would fix {} ({} changes):",
             codeowners_path.display(),
-            fixes_applied.len()
+            result.fixes.len()
         );
-        for fix in &fixes_applied {
+        for fix in &result.fixes {
             println!("  - {}", fix);
         }
         println!("\nRun with --write or -w to apply fixes");
         ExitCode::from(1)
     }
-}
-
-/// Apply safe fixes to CODEOWNERS content.
-/// Returns (fixed_content, list_of_fixes_applied)
-fn apply_safe_fixes(content: &str) -> (String, Vec<String>) {
-    use std::collections::HashSet;
-
-    let lines = parser::parse_codeowners_file_with_positions(content);
-    let original_lines: Vec<&str> = content.lines().collect();
-
-    let mut fixes = Vec::new();
-    let mut lines_to_delete: HashSet<usize> = HashSet::new();
-    let mut line_replacements: std::collections::HashMap<usize, String> =
-        std::collections::HashMap::new();
-
-    // Track patterns for shadowed rule detection
-    let mut exact_patterns: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
-
-    for parsed_line in &lines {
-        if let parser::CodeownersLine::Rule { pattern, owners } = &parsed_line.content {
-            let line_num = parsed_line.line_number as usize;
-            let normalized_pattern = pattern.trim_start_matches('/');
-
-            // Fix 1: Remove duplicate owners
-            let mut seen_owners: HashSet<&str> = HashSet::new();
-            let deduped: Vec<&str> = owners
-                .iter()
-                .map(|s| s.as_str())
-                .filter(|o| seen_owners.insert(*o))
-                .collect();
-
-            if deduped.len() < owners.len() {
-                let new_line = if deduped.is_empty() {
-                    pattern.clone()
-                } else {
-                    format!("{} {}", pattern, deduped.join(" "))
-                };
-                line_replacements.insert(line_num, new_line);
-                fixes.push(format!("line {}: removed duplicate owners", line_num + 1));
-            }
-
-            // Fix 2: Remove shadowed rules (exact duplicates)
-            if let Some(&prev_line) = exact_patterns.get(normalized_pattern) {
-                lines_to_delete.insert(prev_line);
-                fixes.push(format!(
-                    "line {}: removed shadowed rule (duplicated on line {})",
-                    prev_line + 1,
-                    line_num + 1
-                ));
-            }
-            exact_patterns.insert(normalized_pattern.to_string(), line_num);
-        }
-    }
-
-    // Build the fixed content
-    let mut result = Vec::new();
-    for (i, line) in original_lines.iter().enumerate() {
-        if lines_to_delete.contains(&i) {
-            continue; // Skip deleted lines
-        }
-        if let Some(replacement) = line_replacements.get(&i) {
-            result.push(replacement.clone());
-        } else {
-            result.push(line.to_string());
-        }
-    }
-
-    let mut output = result.join("\n");
-    if !content.is_empty() && content.ends_with('\n') && !output.ends_with('\n') {
-        output.push('\n');
-    }
-
-    (output, fixes)
 }
 
 fn main() -> ExitCode {

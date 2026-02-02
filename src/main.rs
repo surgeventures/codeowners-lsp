@@ -1,6 +1,7 @@
 mod diagnostics;
 mod file_cache;
 mod github;
+mod ownership;
 mod parser;
 mod pattern;
 mod validation;
@@ -19,9 +20,10 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 use diagnostics::compute_diagnostics_sync;
 use file_cache::FileCache;
 use github::GitHubClient;
+use ownership::{apply_safe_fixes, check_file_ownership};
 use parser::{
-    find_insertion_point, parse_codeowners_file, parse_codeowners_file_with_positions,
-    serialize_codeowners, CodeownersLine,
+    find_insertion_point, format_codeowners, parse_codeowners_file,
+    parse_codeowners_file_with_positions, serialize_codeowners, CodeownersLine,
 };
 use pattern::pattern_matches;
 
@@ -200,7 +202,6 @@ impl Backend {
 
             // Handle "shadowed rule" diagnostics - offer to remove the dead rule
             if diagnostic.message.contains("shadowed by") && line_num < lines.len() {
-                // Create edit to delete this line
                 let delete_range = Range {
                     start: Position {
                         line: line_num as u32,
@@ -374,7 +375,6 @@ impl Backend {
                 let settings = self.settings.read().unwrap();
                 let last_line = lines.len() as u32;
 
-                // Offer to add catch-all rule with configured owners
                 if let Some(ref individual) = settings.individual {
                     let new_line = format!("* {}\n", individual);
                     let insert_pos = Position {
@@ -445,6 +445,45 @@ impl Backend {
             }
         }
 
+        // Add "Fix all" source action if there are fixable issues
+        let fix_result = apply_safe_fixes(&content);
+        if !fix_result.fixes.is_empty() {
+            let line_count = content.lines().count();
+            let last_line_len = content.lines().last().map(|l| l.len()).unwrap_or(0);
+
+            let mut changes = HashMap::new();
+            changes.insert(
+                uri.clone(),
+                vec![TextEdit {
+                    range: Range {
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: line_count as u32,
+                            character: last_line_len as u32,
+                        },
+                    },
+                    new_text: fix_result.content,
+                }],
+            );
+
+            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
+                title: format!("Fix all safe issues ({} fixes)", fix_result.fixes.len()),
+                kind: Some(CodeActionKind::SOURCE_FIX_ALL),
+                diagnostics: None,
+                edit: Some(WorkspaceEdit {
+                    changes: Some(changes),
+                    ..Default::default()
+                }),
+                command: None,
+                is_preferred: None,
+                disabled: None,
+                data: None,
+            }));
+        }
+
         if actions.is_empty() {
             Ok(None)
         } else {
@@ -491,7 +530,6 @@ impl Backend {
         );
 
         let new_content = serialize_codeowners(&lines);
-        // Ensure file ends with newline
         let new_content = if new_content.ends_with('\n') {
             new_content
         } else {
@@ -565,20 +603,9 @@ impl Backend {
     fn find_matching_rule(&self, file_path: &str) -> Option<(u32, String)> {
         let codeowners_path = self.codeowners_path.read().unwrap();
         let path = codeowners_path.as_ref()?;
-
         let content = fs::read_to_string(path).ok()?;
-        let lines = parse_codeowners_file_with_positions(&content);
 
-        // Iterate in reverse since last match wins
-        for parsed_line in lines.iter().rev() {
-            if let CodeownersLine::Rule { pattern, .. } = &parsed_line.content {
-                if pattern_matches(pattern, file_path) {
-                    return Some((parsed_line.line_number, pattern.clone()));
-                }
-            }
-        }
-
-        None
+        check_file_ownership(&content, file_path).map(|r| (r.line_number, r.pattern))
     }
 }
 
@@ -642,7 +669,6 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
-        // Publish initial diagnostics for CODEOWNERS file
         self.publish_codeowners_diagnostics().await;
     }
 
@@ -663,7 +689,6 @@ impl LanguageServer for Backend {
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = &params.text_document.uri;
         if self.is_codeowners_file(uri) {
-            // Get the full text from the change events (we requested FULL sync)
             if let Some(change) = params.content_changes.first() {
                 let diagnostics = self.compute_diagnostics(&change.text).await;
                 self.client
@@ -676,11 +701,9 @@ impl LanguageServer for Backend {
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = &params.text_document.uri;
         if self.is_codeowners_file(uri) {
-            // Reload codeowners and refresh cache
             self.load_codeowners();
             self.refresh_file_cache();
 
-            // Publish diagnostics
             if let Some(text) = params.text {
                 let diagnostics = self.compute_diagnostics(&text).await;
                 self.client
@@ -726,7 +749,6 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
 
-        // Don't navigate from CODEOWNERS file itself
         if self.is_codeowners_file(uri) {
             return Ok(None);
         }
@@ -749,7 +771,6 @@ impl LanguageServer for Backend {
                 Err(_) => return Ok(None),
             };
 
-        // Find the matching rule
         if let Some((line_number, _pattern)) = self.find_matching_rule(&relative_path) {
             let codeowners_path = self.codeowners_path.read().unwrap();
             if let Some(path) = codeowners_path.as_ref() {
@@ -777,12 +798,10 @@ impl LanguageServer for Backend {
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = &params.text_document.uri;
 
-        // Handle CODEOWNERS file code actions (fix diagnostics)
         if self.is_codeowners_file(uri) {
             return self.codeowners_code_actions(&params).await;
         }
 
-        // Handle regular file code actions (take ownership)
         let file_path = match uri.to_file_path() {
             Ok(p) => p,
             Err(_) => return Ok(None),
@@ -806,7 +825,6 @@ impl LanguageServer for Backend {
 
         let mut actions = Vec::new();
 
-        // Helper to create a code action
         let make_action = |title: String, command: &str, pattern: &str, owner: Option<&str>| {
             let mut args = vec![
                 serde_json::Value::String(uri.to_string()),
@@ -835,7 +853,6 @@ impl LanguageServer for Backend {
         let file_pattern = format!("/{}", relative_path);
 
         if has_existing_owners {
-            // Offer to add to existing or create more specific entry
             if let Some(ref individual) = settings.individual {
                 actions.push(make_action(
                     format!("Add {} to existing CODEOWNERS entry", individual),
@@ -877,7 +894,6 @@ impl LanguageServer for Backend {
                 None,
             ));
         } else {
-            // No existing owners - offer to take ownership
             if let Some(ref individual) = settings.individual {
                 actions.push(make_action(
                     format!("Take ownership as {}", individual),
@@ -912,7 +928,6 @@ impl LanguageServer for Backend {
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
         let uri = &params.text_document.uri;
 
-        // For CODEOWNERS file, show file match counts
         if self.is_codeowners_file(uri) {
             let codeowners_path = self.codeowners_path.read().unwrap();
             if let Some(path) = codeowners_path.as_ref() {
@@ -960,7 +975,6 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        // For other files, show ownership info
         let (label, tooltip) = match self.get_owners_for_file(uri) {
             Some(owners) => (
                 format!("Owned by: {}", owners),
@@ -1008,7 +1022,6 @@ impl LanguageServer for Backend {
         let command = &params.command;
         let args = params.arguments;
 
-        // Parse arguments: [uri, pattern, owner?]
         if args.first().and_then(|v| v.as_str()).is_none() {
             return Err(tower_lsp::jsonrpc::Error::invalid_params(
                 "Missing URI argument",
@@ -1022,7 +1035,6 @@ impl LanguageServer for Backend {
 
         let owner = args.get(2).and_then(|v| v.as_str());
 
-        // For custom commands, we need the owner from the client
         let is_custom = command.ends_with(".custom");
         if is_custom && owner.is_none() {
             self.client
@@ -1034,7 +1046,6 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        // Get owner from settings if not provided (for individual/team commands)
         let owner = if let Some(o) = owner {
             o.to_string()
         } else {
@@ -1064,7 +1075,6 @@ impl LanguageServer for Backend {
 
         match result {
             Ok(()) => {
-                // Reload codeowners after modification
                 self.load_codeowners();
                 self.refresh_file_cache();
                 self.publish_codeowners_diagnostics().await;
@@ -1086,14 +1096,12 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = &params.text_document_position.text_document.uri;
 
-        // Only provide completions in CODEOWNERS file
         if !self.is_codeowners_file(uri) {
             return Ok(None);
         }
 
         let position = params.text_document_position.position;
 
-        // Get current line text
         let codeowners_path = self.codeowners_path.read().unwrap();
         let path = match codeowners_path.as_ref() {
             Some(p) => p.clone(),
@@ -1112,7 +1120,6 @@ impl LanguageServer for Backend {
             None => return Ok(None),
         };
 
-        // Get text up to cursor
         let col = position.character as usize;
         let text_before_cursor = if col <= line.len() {
             &line[..col]
@@ -1120,13 +1127,12 @@ impl LanguageServer for Backend {
             line
         };
 
-        // Find current word being typed
         let last_space = text_before_cursor.rfind(' ').map(|i| i + 1).unwrap_or(0);
         let current_word = &text_before_cursor[last_space..];
 
         let mut items = Vec::new();
 
-        // Path completions (starts with / or is first word)
+        // Path completions
         if current_word.starts_with('/') || last_space == 0 {
             let file_cache = self.file_cache.read().unwrap();
             if let Some(ref cache) = *file_cache {
@@ -1154,7 +1160,6 @@ impl LanguageServer for Backend {
                     });
                 }
 
-                // Also suggest common patterns
                 if prefix.is_empty() || "*".starts_with(prefix) {
                     items.push(CompletionItem {
                         label: "*".to_string(),
@@ -1184,11 +1189,10 @@ impl LanguageServer for Backend {
             }
         }
 
-        // Owner completions (starts with @)
+        // Owner completions
         if current_word.starts_with('@') {
             let settings = self.settings.read().unwrap();
 
-            // Suggest configured individual
             if let Some(ref individual) = settings.individual {
                 if individual.starts_with(current_word) {
                     items.push(CompletionItem {
@@ -1200,7 +1204,6 @@ impl LanguageServer for Backend {
                 }
             }
 
-            // Suggest configured team
             if let Some(ref team) = settings.team {
                 if team.starts_with(current_word) {
                     items.push(CompletionItem {
@@ -1212,10 +1215,8 @@ impl LanguageServer for Backend {
                 }
             }
 
-            // Collect existing owners from the file for suggestions
             let parsed = parse_codeowners_file_with_positions(&content);
-            let mut seen_owners: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
+            let mut seen_owners: HashSet<String> = HashSet::new();
 
             for line in &parsed {
                 if let CodeownersLine::Rule { owners, .. } = &line.content {
@@ -1224,9 +1225,9 @@ impl LanguageServer for Backend {
                             items.push(CompletionItem {
                                 label: owner.clone(),
                                 kind: Some(if owner.contains('/') {
-                                    CompletionItemKind::CLASS // Team
+                                    CompletionItemKind::CLASS
                                 } else {
-                                    CompletionItemKind::CONSTANT // User
+                                    CompletionItemKind::CONSTANT
                                 }),
                                 detail: Some("Used in this file".to_string()),
                                 ..Default::default()
@@ -1247,7 +1248,6 @@ impl LanguageServer for Backend {
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
         let uri = &params.text_document.uri;
 
-        // Only format CODEOWNERS files
         if !self.is_codeowners_file(uri) {
             return Ok(None);
         }
@@ -1267,10 +1267,9 @@ impl LanguageServer for Backend {
         let formatted = format_codeowners(&content);
 
         if formatted == content {
-            return Ok(None); // No changes needed
+            return Ok(None);
         }
 
-        // Return a single edit that replaces the entire document
         let line_count = content.lines().count();
         let last_line_len = content.lines().last().map(|l| l.len()).unwrap_or(0);
 
@@ -1290,7 +1289,7 @@ impl LanguageServer for Backend {
     }
 }
 
-/// Format an owner as a clickable GitHub link
+/// Format an owner as a clickable GitHub link (LSP-specific, uses markdown)
 fn format_owner_link(owner: &str) -> String {
     if let Some(user) = owner.strip_prefix('@') {
         if user.contains('/') {
@@ -1306,64 +1305,10 @@ fn format_owner_link(owner: &str) -> String {
             return format!("[`{}`]({})", owner, url);
         }
     } else if owner.contains('@') {
-        // Email - no link, just format
+        // Email - no link
         return format!("`{}`", owner);
     }
-    // Fallback
     format!("`{}`", owner)
-}
-
-/// Format CODEOWNERS content (same logic as CLI)
-fn format_codeowners(content: &str) -> String {
-    let mut result = Vec::new();
-    let mut prev_was_empty = false;
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-
-        // Preserve blank lines but collapse multiple
-        if trimmed.is_empty() {
-            if !prev_was_empty && !result.is_empty() {
-                result.push(String::new());
-            }
-            prev_was_empty = true;
-            continue;
-        }
-        prev_was_empty = false;
-
-        // Comments: normalize to single space after #
-        if let Some(comment_text) = trimmed.strip_prefix('#') {
-            let comment_text = comment_text.trim();
-            if comment_text.is_empty() {
-                result.push("#".to_string());
-            } else {
-                result.push(format!("# {}", comment_text));
-            }
-            continue;
-        }
-
-        // Rules: normalize spacing between pattern and owners
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.is_empty() {
-            continue;
-        }
-
-        let pattern = parts[0];
-        let owners = &parts[1..];
-
-        if owners.is_empty() {
-            result.push(pattern.to_string());
-        } else {
-            result.push(format!("{} {}", pattern, owners.join(" ")));
-        }
-    }
-
-    // Ensure trailing newline
-    let mut output = result.join("\n");
-    if !output.is_empty() && !output.ends_with('\n') {
-        output.push('\n');
-    }
-    output
 }
 
 #[tokio::main]

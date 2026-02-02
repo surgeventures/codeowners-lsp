@@ -123,6 +123,54 @@ pub fn find_insertion_point(lines: &[CodeownersLine], _pattern: &str) -> usize {
     lines.len()
 }
 
+/// Format a CODEOWNERS file: normalize rule spacing, preserve comments exactly
+pub fn format_codeowners(content: &str) -> String {
+    let mut result = Vec::new();
+    let mut prev_was_empty = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Preserve blank lines but collapse multiple
+        if trimmed.is_empty() {
+            if !prev_was_empty && !result.is_empty() {
+                result.push(String::new());
+            }
+            prev_was_empty = true;
+            continue;
+        }
+        prev_was_empty = false;
+
+        // Comments: preserve exactly as-is (people use specific formatting)
+        if trimmed.starts_with('#') {
+            result.push(line.to_string());
+            continue;
+        }
+
+        // Rules: normalize spacing between pattern and owners
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        let pattern = parts[0];
+        let owners = &parts[1..];
+
+        if owners.is_empty() {
+            result.push(pattern.to_string());
+        } else {
+            result.push(format!("{} {}", pattern, owners.join(" ")));
+        }
+    }
+
+    // Ensure trailing newline
+    let mut output = result.join("\n");
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

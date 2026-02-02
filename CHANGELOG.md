@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.3] - 2026-02-02
+
+### Added
+
+- **"Fix all safe issues"** code action in LSP - one-click fix for all auto-fixable issues
+
+### Changed
+
+- Refactored shared logic into `ownership.rs` module (cleaner codebase)
+- Formatter now preserves comment formatting exactly (no normalization)
+
 ## [0.4.2] - 2026-02-02
 
 ### Added

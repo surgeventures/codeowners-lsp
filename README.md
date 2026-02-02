@@ -119,6 +119,7 @@ The LSP finds CODEOWNERS in standard locations: `.github/CODEOWNERS`, `CODEOWNER
 | CLI: fix (auto-fix safe issues)       | ✅     |
 | LSP: textDocument/formatting          | ✅     |
 | Hover: clickable GitHub links         | ✅     |
+| Code actions: fix all safe issues     | ✅     |
 
 ## License
 
