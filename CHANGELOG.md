@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.6.2] - 2026-02-02
+
+### Fixed
+
+- **Release includes both binaries** - `codeowners-cli` now included in release tarballs alongside `codeowners-lsp`
+
 ## [0.6.1] - 2026-02-02
 
 ### Added
