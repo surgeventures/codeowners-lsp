@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.5.3] - 2026-02-02
+
+### Added
+
+- **`file-not-owned` diagnostic** - files without CODEOWNERS entry show full-file error (impossible to miss!)
+  - Default severity: `error`, configurable via `[diagnostics] file-not-owned = "off"` to disable
+  - Existing "Take ownership" code actions work with this diagnostic
+- **Smart insertion point** for new CODEOWNERS entries:
+  - Inserts near rules with similar directory prefixes
+  - Falls back to inserting near other rules by same owner
+  - Inserts before catch-all rules (`*`, `/**`)
+- **CLI: `config`** - show config file paths and merged settings (like `mise config`)
+
+### Changed
+
+- `validate-owners` now runs requests in parallel (5 concurrent) with progress bar
+
+## [0.5.2] - 2026-02-02
+
+### Added
+
+- **Colorized CLI output** - all commands now use colored output for better readability
+
+### Fixed
+
+- Fixed clippy warnings for CLI-only code (dead_code attributes)
+
 ## [0.5.1] - 2026-02-02
 
 ### Added
