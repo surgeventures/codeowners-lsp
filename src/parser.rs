@@ -97,6 +97,7 @@ pub fn parse_codeowners_file_with_positions(content: &str) -> Vec<ParsedLine> {
 }
 
 /// Parse a CODEOWNERS file into structured lines (without positions)
+#[allow(dead_code)]
 pub fn parse_codeowners_file(content: &str) -> Vec<CodeownersLine> {
     parse_codeowners_file_with_positions(content)
         .into_iter()
@@ -105,6 +106,7 @@ pub fn parse_codeowners_file(content: &str) -> Vec<CodeownersLine> {
 }
 
 /// Write parsed lines back to a string
+#[allow(dead_code)]
 pub fn serialize_codeowners(lines: &[CodeownersLine]) -> String {
     lines
         .iter()
@@ -114,6 +116,7 @@ pub fn serialize_codeowners(lines: &[CodeownersLine]) -> String {
 }
 
 /// Find the best insertion point for a new pattern (maintains specificity order)
+#[allow(dead_code)]
 pub fn find_insertion_point(lines: &[CodeownersLine], _pattern: &str) -> usize {
     // CODEOWNERS rules are matched last-match-wins, so more specific patterns
     // should come later in the file. We'll insert at the end by default.

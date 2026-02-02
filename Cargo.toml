@@ -12,6 +12,10 @@ categories = ["development-tools"]
 name = "codeowners-lsp"
 path = "src/main.rs"
 
+[[bin]]
+name = "codeowners-cli"
+path = "src/cli.rs"
+
 [dependencies]
 codeowners = "0.1"
 glob = "0.3"
