@@ -259,6 +259,51 @@ fn common_prefix_depth(a: &str, b: &str) -> usize {
     depth
 }
 
+/// Find the @owner at a given character position in a line
+#[allow(dead_code)] // Used by LSP only
+pub fn find_owner_at_position(line: &str, char_idx: usize) -> Option<String> {
+    // Skip comments
+    if line.trim_start().starts_with('#') {
+        return None;
+    }
+
+    // Find all potential owners in the line
+    let mut owners: Vec<(usize, usize, String)> = Vec::new();
+    let mut i = 0;
+    let chars: Vec<char> = line.chars().collect();
+
+    while i < chars.len() {
+        if chars[i] == '@' {
+            let start = i;
+            i += 1;
+            // Collect owner chars (alphanumeric, -, _, /)
+            while i < chars.len()
+                && (chars[i].is_alphanumeric()
+                    || chars[i] == '-'
+                    || chars[i] == '_'
+                    || chars[i] == '/')
+            {
+                i += 1;
+            }
+            if i > start + 1 {
+                let owner: String = chars[start..i].iter().collect();
+                owners.push((start, i, owner));
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    // Find which owner the cursor is on
+    for (start, end, owner) in owners {
+        if char_idx >= start && char_idx < end {
+            return Some(owner);
+        }
+    }
+
+    None
+}
+
 /// Format a CODEOWNERS file: normalize rule spacing, preserve comments exactly
 pub fn format_codeowners(content: &str) -> String {
     let mut result = Vec::new();

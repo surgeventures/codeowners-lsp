@@ -1,6 +1,7 @@
 mod diagnostics;
 mod file_cache;
 mod github;
+mod handlers;
 mod ownership;
 mod parser;
 mod pattern;
@@ -22,8 +23,9 @@ use file_cache::{is_internally_ignored, FileCache};
 use github::{GitHubClient, PersistentCache};
 use ownership::{apply_safe_fixes, check_file_ownership};
 use parser::{
-    find_insertion_point_with_owner, format_codeowners, parse_codeowners_file,
-    parse_codeowners_file_with_positions, serialize_codeowners, CodeownersLine,
+    find_insertion_point_with_owner, find_owner_at_position, format_codeowners,
+    parse_codeowners_file, parse_codeowners_file_with_positions, serialize_codeowners,
+    CodeownersLine,
 };
 use pattern::pattern_matches;
 
@@ -1109,6 +1111,49 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }),
                 document_formatting_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                folding_range_provider: Some(FoldingRangeProviderCapability::Simple(true)),
+                references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                })),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(false),
+                }),
+                semantic_tokens_provider: Some(
+                    SemanticTokensServerCapabilities::SemanticTokensOptions(
+                        SemanticTokensOptions {
+                            legend: SemanticTokensLegend {
+                                token_types: vec![
+                                    SemanticTokenType::COMMENT,
+                                    SemanticTokenType::STRING,   // pattern
+                                    SemanticTokenType::VARIABLE, // @user
+                                    SemanticTokenType::CLASS,    // @org/team
+                                    SemanticTokenType::OPERATOR, // glob chars: * ? [ ]
+                                ],
+                                token_modifiers: vec![],
+                            },
+                            full: Some(SemanticTokensFullOptions::Bool(true)),
+                            range: Some(false),
+                            work_done_progress_options: Default::default(),
+                        },
+                    ),
+                ),
+                signature_help_provider: Some(SignatureHelpOptions {
+                    trigger_characters: Some(vec![
+                        "*".to_string(),
+                        "?".to_string(),
+                        "[".to_string(),
+                    ]),
+                    retrigger_characters: None,
+                    work_done_progress_options: Default::default(),
+                }),
+                selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
+                linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(
+                    true,
+                )),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -1288,7 +1333,7 @@ impl LanguageServer for Backend {
         let uri = &params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        // Special handling for CODEOWNERS file - hover over @owners shows rich info
+        // Special handling for CODEOWNERS file - hover over @owners or patterns
         if self.is_codeowners_file(uri) {
             if let Some(content) = self.get_codeowners_content() {
                 let lines: Vec<&str> = content.lines().collect();
@@ -1308,6 +1353,56 @@ impl LanguageServer for Backend {
                             }),
                             range: None,
                         }));
+                    }
+
+                    // Check if we're hovering over a pattern (first token before @)
+                    let parsed = parse_codeowners_file_with_positions(&content);
+                    if let Some(parsed_line) =
+                        parsed.iter().find(|p| p.line_number == position.line)
+                    {
+                        if let CodeownersLine::Rule { pattern, .. } = &parsed_line.content {
+                            // Check if cursor is in pattern region
+                            if char_idx >= parsed_line.pattern_start as usize
+                                && char_idx <= parsed_line.pattern_end as usize
+                            {
+                                let file_cache = self.file_cache.read().unwrap();
+                                if let Some(ref cache) = *file_cache {
+                                    let matches = cache.get_matches(pattern);
+                                    let count = matches.len();
+                                    let formatted = if count == 0 {
+                                        format!("**Pattern:** `{}`\n\n*No matching files*", pattern)
+                                    } else {
+                                        let sample: Vec<&str> =
+                                            matches.iter().take(10).map(|s| s.as_str()).collect();
+                                        let files_list = sample
+                                            .iter()
+                                            .map(|f| format!("- `{}`", f))
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        let more = if count > 10 {
+                                            format!("\n\n*...and {} more*", count - 10)
+                                        } else {
+                                            String::new()
+                                        };
+                                        format!(
+                                            "**Pattern:** `{}`\n\n**Matches {} {}:**\n{}{}",
+                                            pattern,
+                                            count,
+                                            if count == 1 { "file" } else { "files" },
+                                            files_list,
+                                            more
+                                        )
+                                    };
+                                    return Ok(Some(Hover {
+                                        contents: HoverContents::Markup(MarkupContent {
+                                            kind: MarkupKind::Markdown,
+                                            value: formatted,
+                                        }),
+                                        range: None,
+                                    }));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2004,6 +2099,210 @@ impl LanguageServer for Backend {
             new_text: formatted,
         }]))
     }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        if !self.is_codeowners_file(&params.text_document.uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let symbols = handlers::symbols::document_symbols(&content);
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+        }
+    }
+
+    async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        if !self.is_codeowners_file(&params.text_document.uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let ranges = handlers::semantic::folding_ranges(&content);
+        if ranges.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(ranges))
+        }
+    }
+
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
+        if !self.is_codeowners_file(&params.text_document.uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let data = handlers::semantic::semantic_tokens(&content);
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
+            result_id: None,
+            data,
+        })))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        if !self.is_codeowners_file(uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let codeowners_path = self.codeowners_path.read().unwrap();
+        let Some(path) = codeowners_path.as_ref() else {
+            return Ok(None);
+        };
+        let Ok(codeowners_uri) = Url::from_file_path(path) else {
+            return Ok(None);
+        };
+        Ok(handlers::navigation::find_references(
+            &content,
+            params.text_document_position.position,
+            &codeowners_uri,
+        ))
+    }
+
+    async fn prepare_rename(
+        &self,
+        params: TextDocumentPositionParams,
+    ) -> Result<Option<PrepareRenameResponse>> {
+        if !self.is_codeowners_file(&params.text_document.uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        Ok(
+            handlers::navigation::prepare_rename(&content, params.position)
+                .map(PrepareRenameResponse::Range),
+        )
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = &params.text_document_position.text_document.uri;
+        if !self.is_codeowners_file(uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let codeowners_path = self.codeowners_path.read().unwrap();
+        let Some(path) = codeowners_path.as_ref() else {
+            return Ok(None);
+        };
+        let Ok(codeowners_uri) = Url::from_file_path(path) else {
+            return Ok(None);
+        };
+        Ok(handlers::navigation::rename_owner(
+            &content,
+            params.text_document_position.position,
+            &params.new_name,
+            &codeowners_uri,
+        ))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let codeowners_path = self.codeowners_path.read().unwrap();
+        let Some(path) = codeowners_path.as_ref() else {
+            return Ok(None);
+        };
+        let Ok(codeowners_uri) = Url::from_file_path(path) else {
+            return Ok(None);
+        };
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let symbols =
+            handlers::symbols::workspace_symbols(&content, &params.query, &codeowners_uri);
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(symbols))
+        }
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        if !self.is_codeowners_file(&params.text_document.uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let file_cache = self.file_cache.read().unwrap();
+        let Some(ref cache) = *file_cache else {
+            return Ok(None);
+        };
+        let lenses = handlers::lens::code_lenses(&content, cache);
+        if lenses.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(lenses))
+        }
+    }
+
+    async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        if !self.is_codeowners_file(&params.text_document_position_params.text_document.uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let position = params.text_document_position_params.position;
+        let lines: Vec<&str> = content.lines().collect();
+        let line = lines.get(position.line as usize).copied().unwrap_or("");
+        Ok(handlers::signature::signature_help(
+            line,
+            position.character as usize,
+        ))
+    }
+
+    async fn selection_range(
+        &self,
+        params: SelectionRangeParams,
+    ) -> Result<Option<Vec<SelectionRange>>> {
+        if !self.is_codeowners_file(&params.text_document.uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        let ranges = handlers::selection::selection_ranges(&content, &params.positions);
+        if ranges.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(ranges))
+        }
+    }
+
+    async fn linked_editing_range(
+        &self,
+        params: LinkedEditingRangeParams,
+    ) -> Result<Option<LinkedEditingRanges>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        if !self.is_codeowners_file(uri) {
+            return Ok(None);
+        }
+        let Some(content) = self.get_codeowners_content() else {
+            return Ok(None);
+        };
+        Ok(handlers::linked::linked_editing_ranges(
+            &content,
+            params.text_document_position_params.position,
+        ))
+    }
 }
 
 /// Find which line numbers changed between two versions of content
@@ -2076,50 +2375,6 @@ fn check_patterns_for_lines(
     }
 
     diagnostics
-}
-
-/// Find the @owner at a given character position in a line
-fn find_owner_at_position(line: &str, char_idx: usize) -> Option<String> {
-    // Skip comments
-    if line.trim_start().starts_with('#') {
-        return None;
-    }
-
-    // Find all potential owners in the line
-    let mut owners: Vec<(usize, usize, String)> = Vec::new();
-    let mut i = 0;
-    let chars: Vec<char> = line.chars().collect();
-
-    while i < chars.len() {
-        if chars[i] == '@' {
-            let start = i;
-            i += 1;
-            // Collect owner chars (alphanumeric, -, _, /)
-            while i < chars.len()
-                && (chars[i].is_alphanumeric()
-                    || chars[i] == '-'
-                    || chars[i] == '_'
-                    || chars[i] == '/')
-            {
-                i += 1;
-            }
-            if i > start + 1 {
-                let owner: String = chars[start..i].iter().collect();
-                owners.push((start, i, owner));
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    // Find which owner the cursor is on
-    for (start, end, owner) in owners {
-        if char_idx >= start && char_idx < end {
-            return Some(owner);
-        }
-    }
-
-    None
 }
 
 /// Format rich hover content for an owner in CODEOWNERS file

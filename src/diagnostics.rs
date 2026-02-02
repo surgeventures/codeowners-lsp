@@ -218,6 +218,24 @@ pub fn compute_diagnostics_sync(
                             parsed_line.line_number + 1
                         ),
                         tags: Some(vec![DiagnosticTag::UNNECESSARY]),
+                        related_information: Some(vec![DiagnosticRelatedInformation {
+                            location: Location {
+                                uri: Url::parse("file:///CODEOWNERS").unwrap_or_else(|_| {
+                                    Url::parse("file:///").unwrap()
+                                }),
+                                range: Range {
+                                    start: Position {
+                                        line: parsed_line.line_number,
+                                        character: 0,
+                                    },
+                                    end: Position {
+                                        line: parsed_line.line_number,
+                                        character: u32::MAX,
+                                    },
+                                },
+                            },
+                            message: "Shadowing rule".to_string(),
+                        }]),
                         ..Default::default()
                     });
                 }

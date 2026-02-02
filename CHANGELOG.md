@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.8.0] - 2026-02-02
+
+### Added
+
+- **Signature Help** - pattern syntax documentation while typing glob characters (`*`, `**`, `?`, `[...]`)
+- **Selection Range** - smart expand selection: word → owner → all owners → whole rule → section → file
+- **Linked Editing** - edit an @owner and all occurrences in the file update simultaneously
+- **Pattern Hover** - hover over patterns to see list of matching files (up to 10 shown)
+- **Related Diagnostics** - "shadowed rule" diagnostics now link to the shadowing rule for quick navigation
+
+### Changed
+
+- **New handler modules** - `handlers/signature.rs`, `handlers/selection.rs`, `handlers/linked.rs`
+
+## [0.7.0] - 2026-02-02
+
+### Added
+
+- **Document Symbols** - outline view of CODEOWNERS file with sections and rules (Cmd+Shift+O)
+- **Workspace Symbols** - search patterns and owners across the file (Cmd+T)
+- **Folding Ranges** - collapse comment blocks and section headers
+- **Semantic Tokens** - syntax highlighting for patterns, @users, @org/teams, glob characters, comments
+- **Find All References** - find all rules containing a specific owner
+- **Rename Symbol** - rename an @owner across all rules in one operation
+- **Code Lens** - inline display showing file count and owners above each rule
+
+### Changed
+
+- **Refactored handler code** - LSP handlers now in `src/handlers/` module for cleaner organization:
+  - `handlers/symbols.rs` - document and workspace symbols
+  - `handlers/navigation.rs` - references, rename
+  - `handlers/semantic.rs` - semantic tokens, folding ranges
+  - `handlers/lens.rs` - code lens
+
 ## [0.6.4] - 2026-02-02
 
 ### Added

@@ -56,6 +56,17 @@ codeowners-cli completions zsh       # zsh, zsh, fish, powershell, elvish
   - fzf-style fuzzy path completions (e.g., `s/m` matches `src/main.rs`)
   - Owner completions from GitHub API with background validation (trigger: `@`)
 - **Inlay Hints**: Shows how many files each pattern matches
+- **Code Lens**: Inline file count and owners above each rule
+- **Document Symbols**: Outline view with sections and rules (Cmd+Shift+O)
+- **Workspace Symbols**: Search patterns and owners across file (Cmd+T)
+- **Folding**: Collapse comment blocks and sections
+- **Semantic Highlighting**: Syntax colors for patterns, owners, globs, comments
+- **Find References**: Find all rules containing an owner
+- **Rename**: Rename an owner across all rules
+- **Signature Help**: Pattern syntax documentation while typing (`*`, `**`, `?`, `[...]`)
+- **Selection Range**: Smart expand selection (word → owner → all owners → rule → section)
+- **Linked Editing**: Edit an owner and all occurrences update simultaneously
+- **Pattern Hover**: Hover over patterns to see matching files
 - **Code Actions**:
   - Remove shadowed rules
   - Remove duplicate owners
@@ -182,6 +193,18 @@ JSON settings can also be passed via LSP init options (these override TOML confi
 | fzf-style fuzzy path completion       | ✅     |
 | Background GitHub validation          | ✅     |
 | Real-time pattern validation          | ✅     |
+| Document symbols (outline view)       | ✅     |
+| Workspace symbols (search)            | ✅     |
+| Folding ranges                        | ✅     |
+| Semantic tokens (syntax highlighting) | ✅     |
+| Find all references                   | ✅     |
+| Rename symbol                         | ✅     |
+| Code lens                             | ✅     |
+| Signature help (pattern syntax)       | ✅     |
+| Selection range (smart expand)        | ✅     |
+| Linked editing (multi-cursor owners)  | ✅     |
+| Pattern hover (show matches)          | ✅     |
+| Related diagnostics (shadowed links)  | ✅     |
 
 ## License
 
