@@ -14,6 +14,11 @@ codeowners-cli check src/main.rs
 
 # Show coverage stats
 codeowners-cli coverage
+
+# Format CODEOWNERS file
+codeowners-cli fmt                    # Prints formatted output
+codeowners-cli fmt --write            # Writes in place
+codeowners-cli fmt --check            # Check if formatted (for CI)
 ```
 
 ## LSP Features
@@ -34,6 +39,9 @@ codeowners-cli coverage
   - Duplicate/shadowed rules (dead code)
   - Rules with no owners
   - Coverage: count of files without owners
+- **Completions**:
+  - Path completions as you type (trigger: `/`)
+  - Owner completions from GitHub API (trigger: `@`, requires `validate_owners`)
 - **Inlay Hints**: Shows how many files each pattern matches
 - **Code Actions**:
   - Remove shadowed rules

@@ -23,17 +23,23 @@ USAGE:
 
 COMMANDS:
     lint [path]       Check CODEOWNERS for issues (default: auto-detect)
+    fmt [path]        Format CODEOWNERS file (normalizes spacing)
+    fix [path]        Auto-fix safe issues (duplicate owners, etc)
     check <file>      Show which rule owns a specific file
     coverage          Show files without owners
 
 OPTIONS:
     --json            Output as JSON (for lint command)
+    --write, -w       Write changes (for fmt/fix commands, default: dry-run)
     --help, -h        Show this help
 
 EXAMPLES:
     codeowners-cli lint
     codeowners-cli lint .github/CODEOWNERS
     codeowners-cli lint --json
+    codeowners-cli fmt
+    codeowners-cli fmt --write
+    codeowners-cli fix --write
     codeowners-cli check src/main.rs
     codeowners-cli coverage
 "
@@ -266,6 +272,136 @@ fn coverage() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn fmt_codeowners(path: Option<&str>, write: bool) -> ExitCode {
+    let cwd = env::current_dir().expect("Failed to get current directory");
+
+    let codeowners_path = if let Some(p) = path {
+        PathBuf::from(p)
+    } else {
+        match find_codeowners(&cwd) {
+            Some(p) => p,
+            None => {
+                eprintln!("No CODEOWNERS file found");
+                return ExitCode::from(1);
+            }
+        }
+    };
+
+    if !codeowners_path.exists() {
+        eprintln!("File not found: {}", codeowners_path.display());
+        return ExitCode::from(1);
+    }
+
+    let content = match fs::read_to_string(&codeowners_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to read {}: {}", codeowners_path.display(), e);
+            return ExitCode::from(1);
+        }
+    };
+
+    let formatted = format_codeowners(&content);
+
+    if formatted == content {
+        println!("✓ {} is already formatted", codeowners_path.display());
+        return ExitCode::SUCCESS;
+    }
+
+    if write {
+        match fs::write(&codeowners_path, &formatted) {
+            Ok(_) => {
+                println!("✓ Formatted {}", codeowners_path.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("Failed to write {}: {}", codeowners_path.display(), e);
+                ExitCode::from(1)
+            }
+        }
+    } else {
+        println!("Would format {}:\n", codeowners_path.display());
+        println!("--- original");
+        println!("+++ formatted\n");
+
+        // Simple diff: show lines that differ
+        let old_lines: Vec<&str> = content.lines().collect();
+        let new_lines: Vec<&str> = formatted.lines().collect();
+
+        let max_lines = old_lines.len().max(new_lines.len());
+        for i in 0..max_lines {
+            let old = old_lines.get(i).copied().unwrap_or("");
+            let new = new_lines.get(i).copied().unwrap_or("");
+
+            if old != new {
+                if !old.is_empty() {
+                    println!("-{}", old);
+                }
+                if !new.is_empty() {
+                    println!("+{}", new);
+                }
+            }
+        }
+
+        println!("\nRun with --write or -w to apply changes");
+        ExitCode::from(1)
+    }
+}
+
+/// Format a CODEOWNERS file content
+fn format_codeowners(content: &str) -> String {
+    let mut result = Vec::new();
+    let mut prev_was_empty = false;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Preserve blank lines but collapse multiple
+        if trimmed.is_empty() {
+            if !prev_was_empty && !result.is_empty() {
+                result.push(String::new());
+            }
+            prev_was_empty = true;
+            continue;
+        }
+        prev_was_empty = false;
+
+        // Comments: normalize to single space after #
+        if let Some(comment_text) = trimmed.strip_prefix('#') {
+            let comment_text = comment_text.trim();
+            if comment_text.is_empty() {
+                result.push("#".to_string());
+            } else {
+                result.push(format!("# {}", comment_text));
+            }
+            continue;
+        }
+
+        // Rules: normalize spacing between pattern and owners
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+
+        let pattern = parts[0];
+        let owners = &parts[1..];
+
+        if owners.is_empty() {
+            // No owners - just the pattern
+            result.push(pattern.to_string());
+        } else {
+            // Pattern + owners with single space
+            result.push(format!("{} {}", pattern, owners.join(" ")));
+        }
+    }
+
+    // Ensure trailing newline
+    let mut output = result.join("\n");
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
 
@@ -297,6 +433,27 @@ fn main() -> ExitCode {
             }
 
             lint(path, json_output)
+        }
+        "fmt" | "format" => {
+            let mut path = None;
+            let mut write = false;
+
+            for arg in &args[2..] {
+                match arg.as_str() {
+                    "--write" | "-w" => write = true,
+                    "--help" | "-h" => {
+                        print_usage();
+                        return ExitCode::SUCCESS;
+                    }
+                    _ if !arg.starts_with('-') => path = Some(arg.as_str()),
+                    _ => {
+                        eprintln!("Unknown option: {}", arg);
+                        return ExitCode::from(1);
+                    }
+                }
+            }
+
+            fmt_codeowners(path, write)
         }
         "check" => {
             if args.len() < 3 {

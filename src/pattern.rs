@@ -11,25 +11,156 @@ fn pattern_matches_impl(pattern: &str, path: &str) -> bool {
         return true;
     }
 
+    // Handle complex patterns with * or ** - use full glob matching
+    // This handles: deployment/*/deploy/**, *crowdin*, src/**/test.rs, etc.
+    if pattern.contains('*') {
+        return glob_match(pattern, path);
+    }
+
     // Handle directory patterns like /dir/ or dir/
     if pattern.ends_with('/') {
         let dir = pattern.trim_end_matches('/');
-        return path.starts_with(dir);
-    }
-
-    // Handle patterns ending with /* or /**
-    if pattern.ends_with("/**") || pattern.ends_with("/*") {
-        let dir = pattern.trim_end_matches("/**").trim_end_matches("/*");
-        return path.starts_with(dir);
-    }
-
-    // Handle extension patterns like *.rs
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        return path.ends_with(suffix);
+        return path.starts_with(dir)
+            && (path.len() == dir.len() || path[dir.len()..].starts_with('/'));
     }
 
     // Exact match or prefix match for directories
     path == pattern || path.starts_with(&format!("{}/", pattern))
+}
+
+/// Simple glob matching with * wildcards
+fn glob_match(pattern: &str, path: &str) -> bool {
+    let pattern_parts: Vec<&str> = pattern.split('/').collect();
+    let path_parts: Vec<&str> = path.split('/').collect();
+
+    // Special case: single segment pattern like *.rs should match files in any directory
+    // This is CODEOWNERS semantics - *.rs means "any .rs file anywhere"
+    if pattern_parts.len() == 1 && pattern_parts[0].contains('*') {
+        // Match against the filename (last segment)
+        if let Some(filename) = path_parts.last() {
+            return segment_matches(pattern_parts[0], filename);
+        }
+        return false;
+    }
+
+    glob_match_parts(&pattern_parts, &path_parts)
+}
+
+fn glob_match_parts(pattern_parts: &[&str], path_parts: &[&str]) -> bool {
+    let mut pi = 0; // pattern index
+    let mut fi = 0; // file path index
+
+    while pi < pattern_parts.len() {
+        let pattern_part = pattern_parts[pi];
+
+        // Handle ** (matches zero or more path segments)
+        if pattern_part == "**" {
+            // If ** is the last pattern part, it matches everything remaining
+            if pi == pattern_parts.len() - 1 {
+                return true;
+            }
+
+            // Try matching ** against zero or more segments
+            for skip in 0..=(path_parts.len().saturating_sub(fi)) {
+                if glob_match_parts(&pattern_parts[pi + 1..], &path_parts[fi + skip..]) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // No more path parts but still have pattern parts
+        if fi >= path_parts.len() {
+            return false;
+        }
+
+        let path_part = path_parts[fi];
+
+        // Handle * within a segment (e.g., *.rs, *crowdin*, create_service*)
+        if pattern_part.contains('*') {
+            if !segment_matches(pattern_part, path_part) {
+                return false;
+            }
+        } else if pattern_part != path_part {
+            // Exact segment match required
+            return false;
+        }
+
+        pi += 1;
+        fi += 1;
+    }
+
+    // All pattern parts consumed - check if all path parts consumed too
+    fi >= path_parts.len()
+}
+
+/// Match a single path segment against a pattern with * wildcards
+fn segment_matches(pattern: &str, segment: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+
+    let parts: Vec<&str> = pattern.split('*').collect();
+
+    if parts.len() == 1 {
+        // No wildcard
+        return pattern == segment;
+    }
+
+    if parts.len() == 2 {
+        // Simple case: prefix*suffix
+        let prefix = parts[0];
+        let suffix = parts[1];
+
+        if prefix.is_empty() && suffix.is_empty() {
+            return true; // Just "*"
+        }
+        if prefix.is_empty() {
+            return segment.ends_with(suffix);
+        }
+        if suffix.is_empty() {
+            return segment.starts_with(prefix);
+        }
+        return segment.starts_with(prefix)
+            && segment.ends_with(suffix)
+            && segment.len() >= prefix.len() + suffix.len();
+    }
+
+    // Multiple wildcards (e.g., *foo*bar*) - use sequential matching
+    if parts.is_empty() {
+        return true; // Pattern is just "*"
+    }
+
+    let first = parts[0];
+    if !first.is_empty() && !segment.starts_with(first) {
+        return false;
+    }
+
+    let mut remaining = if first.is_empty() {
+        segment
+    } else {
+        &segment[first.len()..]
+    };
+
+    for (i, part) in parts.iter().enumerate().skip(1) {
+        if part.is_empty() {
+            continue;
+        }
+        if i == parts.len() - 1 {
+            // Last part must match at the end
+            if !remaining.ends_with(part) {
+                return false;
+            }
+        } else {
+            // Middle part must exist somewhere
+            match remaining.find(part) {
+                Some(pos) => remaining = &remaining[pos + part.len()..],
+                None => return false,
+            }
+        }
+    }
+
+    true
 }
 
 /// Check if pattern `a` is subsumed by pattern `b` (i.e., everything `a` matches, `b` also matches).
@@ -146,6 +277,103 @@ mod tests {
         assert!(pattern_matches("src/lib/", "src/lib/mod.rs"));
         assert!(pattern_matches("/src/lib/", "src/lib/nested.rs"));
         assert!(!pattern_matches("src/lib/", "src/other/file.rs"));
+    }
+
+    #[test]
+    fn test_double_star_prefix() {
+        // **/foo.txt matches foo.txt in any directory
+        assert!(pattern_matches(
+            "**/mirrord_config.json",
+            "src/mirrord_config.json"
+        ));
+        assert!(pattern_matches(
+            "**/mirrord_config.json",
+            "mirrord_config.json"
+        ));
+        assert!(pattern_matches(
+            "**/mirrord_config.json",
+            "a/b/c/mirrord_config.json"
+        ));
+        assert!(!pattern_matches("**/mirrord_config.json", "src/other.json"));
+
+        // Leading slash variant
+        assert!(pattern_matches(
+            "/**/mirrord_config.json",
+            "src/mirrord_config.json"
+        ));
+        assert!(pattern_matches("/**/foo.txt", "foo.txt"));
+        assert!(pattern_matches("/**/foo.txt", "dir/foo.txt"));
+    }
+
+    #[test]
+    fn test_double_star_middle() {
+        // src/**/test.rs matches src/test.rs, src/foo/test.rs, etc.
+        assert!(pattern_matches("src/**/test.rs", "src/test.rs"));
+        assert!(pattern_matches("src/**/test.rs", "src/foo/test.rs"));
+        assert!(pattern_matches("src/**/test.rs", "src/foo/bar/test.rs"));
+        assert!(!pattern_matches("src/**/test.rs", "other/test.rs"));
+        assert!(!pattern_matches("src/**/test.rs", "src/foo/other.rs"));
+    }
+
+    #[test]
+    fn test_single_star_in_path() {
+        // deployment/*/deploy matches deployment/foo/deploy
+        assert!(pattern_matches(
+            "deployment/*/deploy/apps/staging/Chart.yaml",
+            "deployment/analytics/deploy/apps/staging/Chart.yaml"
+        ));
+        assert!(pattern_matches(
+            "deployment/*/deploy/**",
+            "deployment/foo/deploy/bar/baz.yaml"
+        ));
+        assert!(!pattern_matches(
+            "deployment/*/deploy/**",
+            "other/foo/deploy/bar.yaml"
+        ));
+    }
+
+    #[test]
+    fn test_star_in_filename() {
+        // *crowdin* matches files with crowdin in the name
+        assert!(pattern_matches(
+            ".github/workflows/*crowdin*",
+            ".github/workflows/crowdin-download.yaml"
+        ));
+        assert!(pattern_matches(
+            ".github/workflows/*crowdin*",
+            ".github/workflows/upload-crowdin-files.yaml"
+        ));
+        assert!(!pattern_matches(
+            ".github/workflows/*crowdin*",
+            ".github/workflows/deploy.yaml"
+        ));
+
+        // create_service*.ex
+        assert!(pattern_matches(
+            "src/apps/platform_rpc/lib/platform_rpc/grpc/action/create_service*.ex",
+            "src/apps/platform_rpc/lib/platform_rpc/grpc/action/create_service_foo.ex"
+        ));
+        assert!(pattern_matches(
+            "lib/create_service*.ex",
+            "lib/create_service_provider.ex"
+        ));
+    }
+
+    #[test]
+    fn test_star_prefix_suffix() {
+        // appointment_review* matches appointment_review.ex, appointment_review_test.ex
+        assert!(pattern_matches(
+            "src/apps/platform/lib/schemas/appointment_review*",
+            "src/apps/platform/lib/schemas/appointment_review.ex"
+        ));
+        assert!(pattern_matches(
+            "src/apps/platform/lib/schemas/appointment_review*",
+            "src/apps/platform/lib/schemas/appointment_review_test.ex"
+        ));
+        assert!(!pattern_matches(
+            "src/apps/platform/lib/schemas/appointment_review*",
+            "src/apps/platform/lib/schemas/other.ex"
+        ));
     }
 
     // Subsumption tests

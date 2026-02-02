@@ -627,6 +627,10 @@ impl LanguageServer for Backend {
                     work_done_progress_options: Default::default(),
                 }),
                 definition_provider: Some(OneOf::Left(true)),
+                completion_provider: Some(CompletionOptions {
+                    trigger_characters: Some(vec!["/".to_string(), "@".to_string()]),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -1075,6 +1079,167 @@ impl LanguageServer for Backend {
                 self.client.show_message(MessageType::ERROR, &e).await;
                 Err(tower_lsp::jsonrpc::Error::internal_error())
             }
+        }
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = &params.text_document_position.text_document.uri;
+
+        // Only provide completions in CODEOWNERS file
+        if !self.is_codeowners_file(uri) {
+            return Ok(None);
+        }
+
+        let position = params.text_document_position.position;
+
+        // Get current line text
+        let codeowners_path = self.codeowners_path.read().unwrap();
+        let path = match codeowners_path.as_ref() {
+            Some(p) => p.clone(),
+            None => return Ok(None),
+        };
+        drop(codeowners_path);
+
+        let content = match fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => return Ok(None),
+        };
+
+        let lines: Vec<&str> = content.lines().collect();
+        let line = match lines.get(position.line as usize) {
+            Some(l) => *l,
+            None => return Ok(None),
+        };
+
+        // Get text up to cursor
+        let col = position.character as usize;
+        let text_before_cursor = if col <= line.len() {
+            &line[..col]
+        } else {
+            line
+        };
+
+        // Find current word being typed
+        let last_space = text_before_cursor.rfind(' ').map(|i| i + 1).unwrap_or(0);
+        let current_word = &text_before_cursor[last_space..];
+
+        let mut items = Vec::new();
+
+        // Path completions (starts with / or is first word)
+        if current_word.starts_with('/') || last_space == 0 {
+            let file_cache = self.file_cache.read().unwrap();
+            if let Some(ref cache) = *file_cache {
+                let prefix = if current_word.starts_with('/') {
+                    current_word
+                } else {
+                    ""
+                };
+                let paths = cache.complete_path(prefix);
+                for path in paths {
+                    let is_dir = path.ends_with('/');
+                    items.push(CompletionItem {
+                        label: path.clone(),
+                        kind: Some(if is_dir {
+                            CompletionItemKind::FOLDER
+                        } else {
+                            CompletionItemKind::FILE
+                        }),
+                        detail: Some(if is_dir {
+                            "Directory".to_string()
+                        } else {
+                            "File".to_string()
+                        }),
+                        ..Default::default()
+                    });
+                }
+
+                // Also suggest common patterns
+                if prefix.is_empty() || "*".starts_with(prefix) {
+                    items.push(CompletionItem {
+                        label: "*".to_string(),
+                        kind: Some(CompletionItemKind::SNIPPET),
+                        detail: Some("Match all files".to_string()),
+                        ..Default::default()
+                    });
+                    items.push(CompletionItem {
+                        label: "*.rs".to_string(),
+                        kind: Some(CompletionItemKind::SNIPPET),
+                        detail: Some("Match Rust files".to_string()),
+                        ..Default::default()
+                    });
+                    items.push(CompletionItem {
+                        label: "*.ts".to_string(),
+                        kind: Some(CompletionItemKind::SNIPPET),
+                        detail: Some("Match TypeScript files".to_string()),
+                        ..Default::default()
+                    });
+                    items.push(CompletionItem {
+                        label: "*.js".to_string(),
+                        kind: Some(CompletionItemKind::SNIPPET),
+                        detail: Some("Match JavaScript files".to_string()),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
+        // Owner completions (starts with @)
+        if current_word.starts_with('@') {
+            let settings = self.settings.read().unwrap();
+
+            // Suggest configured individual
+            if let Some(ref individual) = settings.individual {
+                if individual.starts_with(current_word) {
+                    items.push(CompletionItem {
+                        label: individual.clone(),
+                        kind: Some(CompletionItemKind::CONSTANT),
+                        detail: Some("Configured individual".to_string()),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            // Suggest configured team
+            if let Some(ref team) = settings.team {
+                if team.starts_with(current_word) {
+                    items.push(CompletionItem {
+                        label: team.clone(),
+                        kind: Some(CompletionItemKind::CLASS),
+                        detail: Some("Configured team".to_string()),
+                        ..Default::default()
+                    });
+                }
+            }
+
+            // Collect existing owners from the file for suggestions
+            let parsed = parse_codeowners_file_with_positions(&content);
+            let mut seen_owners: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+
+            for line in &parsed {
+                if let CodeownersLine::Rule { owners, .. } = &line.content {
+                    for owner in owners {
+                        if owner.starts_with(current_word) && seen_owners.insert(owner.clone()) {
+                            items.push(CompletionItem {
+                                label: owner.clone(),
+                                kind: Some(if owner.contains('/') {
+                                    CompletionItemKind::CLASS // Team
+                                } else {
+                                    CompletionItemKind::CONSTANT // User
+                                }),
+                                detail: Some("Used in this file".to_string()),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if items.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(CompletionResponse::Array(items)))
         }
     }
 }

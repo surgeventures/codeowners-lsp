@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0] - 2026-02-02
+
+### Added
+
+- **Path completions** in CODEOWNERS file - autocomplete file paths as you type
+- **Owner completions** - autocomplete owners from GitHub API (when `validate_owners` enabled)
+- **`fmt` command** in CLI - format/normalize CODEOWNERS files
+
+### Changed
+
+- **Shadowed rules now show as warnings** instead of hints (visible in editors by default)
+- **4x faster linting** via parallel file matching with rayon (e.g., 4.8s → 1.1s on 3800-rule repos)
+
+### Fixed
+
+- Glob patterns like `/**/file.json`, `deployment/*/deploy/**`, and `*crowdin*` now match correctly
+
 ## [0.3.2] - 2026-02-02
 
 ### Fixed

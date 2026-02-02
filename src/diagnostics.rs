@@ -37,6 +37,9 @@ pub fn compute_diagnostics_sync(
     // Collect owners to validate via GitHub (line, offset, owner, len)
     let mut owners_to_validate: Vec<(u32, u32, String, u32)> = Vec::new();
 
+    // Collect patterns for batch matching (pattern, line_number, pattern_start, pattern_end)
+    let mut patterns_to_check: Vec<(&str, u32, u32, u32)> = Vec::new();
+
     for parsed_line in &lines {
         if let CodeownersLine::Rule { pattern, owners } = &parsed_line.content {
             // Check pattern validity
@@ -58,6 +61,14 @@ pub fn compute_diagnostics_sync(
                     message: error,
                     ..Default::default()
                 });
+            } else if file_cache.is_some() {
+                // Only check valid patterns for file matches
+                patterns_to_check.push((
+                    pattern.as_str(),
+                    parsed_line.line_number,
+                    parsed_line.pattern_start,
+                    parsed_line.pattern_end,
+                ));
             }
 
             // Check owner validity (format only)
@@ -117,30 +128,6 @@ pub fn compute_diagnostics_sync(
                 }
             }
 
-            // Check for no matching files
-            if let Some(cache) = file_cache {
-                let match_count = cache.count_matches(pattern);
-                if match_count == 0 {
-                    diagnostics.push(Diagnostic {
-                        range: Range {
-                            start: Position {
-                                line: parsed_line.line_number,
-                                character: parsed_line.pattern_start,
-                            },
-                            end: Position {
-                                line: parsed_line.line_number,
-                                character: parsed_line.pattern_end,
-                            },
-                        },
-                        severity: Some(DiagnosticSeverity::WARNING),
-                        code: Some(NumberOrString::String(codes::PATTERN_NO_MATCH.to_string())),
-                        source: Some("codeowners".to_string()),
-                        message: "Pattern matches no files in the repository".to_string(),
-                        ..Default::default()
-                    });
-                }
-            }
-
             // Check for dead rules (earlier pattern completely shadowed by later)
             for (prev_pattern, prev_line) in &seen_patterns {
                 if pattern_subsumes(prev_pattern, pattern) {
@@ -167,7 +154,7 @@ pub fn compute_diagnostics_sync(
                                 character: u32::MAX,
                             },
                         },
-                        severity: Some(DiagnosticSeverity::HINT),
+                        severity: Some(DiagnosticSeverity::WARNING),
                         code: Some(NumberOrString::String(codes::SHADOWED_RULE.to_string())),
                         source: Some("codeowners".to_string()),
                         message,
@@ -198,6 +185,36 @@ pub fn compute_diagnostics_sync(
                     message:
                         "Rule has no owners - files matching this pattern will have no code owners"
                             .to_string(),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    // Batch check for patterns with no matching files
+    if let Some(cache) = file_cache {
+        let patterns: Vec<&str> = patterns_to_check.iter().map(|(p, _, _, _)| *p).collect();
+        let matched = cache.find_patterns_with_matches(&patterns);
+
+        for (i, (_, line_number, pattern_start, pattern_end)) in
+            patterns_to_check.iter().enumerate()
+        {
+            if !matched.contains(&i) {
+                diagnostics.push(Diagnostic {
+                    range: Range {
+                        start: Position {
+                            line: *line_number,
+                            character: *pattern_start,
+                        },
+                        end: Position {
+                            line: *line_number,
+                            character: *pattern_end,
+                        },
+                    },
+                    severity: Some(DiagnosticSeverity::WARNING),
+                    code: Some(NumberOrString::String(codes::PATTERN_NO_MATCH.to_string())),
+                    source: Some("codeowners".to_string()),
+                    message: "Pattern matches no files in the repository".to_string(),
                     ..Default::default()
                 });
             }
@@ -337,7 +354,7 @@ mod tests {
         let (diagnostics, _) = compute_diagnostics_sync(content, None);
 
         assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::HINT));
+        assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::WARNING));
         assert!(diagnostics[0].message.contains("shadowed"));
         assert_eq!(diagnostics[0].range.start.line, 0); // First rule is shadowed
     }
