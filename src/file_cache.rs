@@ -18,10 +18,14 @@ impl FileCache {
         let mut files = Vec::new();
 
         let walker = WalkBuilder::new(root)
-            .hidden(false)
+            .hidden(false) // Include dotfiles like .github/
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)
+            .filter_entry(|e| {
+                // Exclude .git directory
+                e.file_name() != ".git"
+            })
             .build();
 
         for entry in walker.flatten() {

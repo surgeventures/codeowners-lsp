@@ -788,11 +788,54 @@ impl LanguageServer for Backend {
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = &params.text_document_position_params.text_document.uri;
+
+        // Get relative path for rule lookup
+        let relative_path = {
+            let root = self.workspace_root.read().unwrap();
+            if let Some(root) = root.as_ref() {
+                uri.to_file_path().ok().and_then(|p| {
+                    p.strip_prefix(root)
+                        .ok()
+                        .map(|r| r.to_string_lossy().to_string())
+                })
+            } else {
+                None
+            }
+        };
+
+        // Get the matching rule info (line number, pattern)
+        let rule_info = relative_path
+            .as_ref()
+            .and_then(|path| self.find_matching_rule(path));
+
+        // Build the rule link if we have CODEOWNERS path and rule info
+        let rule_link = if let Some((line_num, pattern)) = &rule_info {
+            let codeowners_path = self.codeowners_path.read().unwrap();
+            if let Some(path) = codeowners_path.as_ref() {
+                if let Ok(codeowners_uri) = Url::from_file_path(path) {
+                    // Line numbers in URIs are 1-indexed
+                    Some(format!(
+                        "\n\n[`{}`]({}#L{}) (line {})",
+                        pattern,
+                        codeowners_uri,
+                        line_num + 1,
+                        line_num + 1
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let formatted = match self.get_owners_for_file(uri) {
             None => "**Owned by nobody**".to_string(),
             Some(owners) => {
                 let owner_list: Vec<&str> = owners.split_whitespace().collect();
-                if owner_list.len() == 1 {
+                let owners_text = if owner_list.len() == 1 {
                     format!("**Owner:** {}", format_owner_link(owner_list[0]))
                 } else {
                     let list = owner_list
@@ -801,6 +844,13 @@ impl LanguageServer for Backend {
                         .collect::<Vec<_>>()
                         .join("\n");
                     format!("**Owners:**\n{}", list)
+                };
+
+                // Append rule link if available
+                if let Some(link) = rule_link {
+                    format!("{}{}", owners_text, link)
+                } else {
+                    owners_text
                 }
             }
         };

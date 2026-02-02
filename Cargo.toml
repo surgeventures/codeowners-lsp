@@ -1,6 +1,6 @@
 [package]
 name = "codeowners-lsp"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Language server providing CODEOWNERS information via hover and inlay hints"
 repository = "https://github.com/radiosilence/codeowners-lsp"
@@ -17,6 +17,8 @@ name = "codeowners-cli"
 path = "src/cli.rs"
 
 [dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 codeowners = "0.1"
 fast-glob = "1.0"
 glob = "0.3"

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.1] - 2026-02-02
+
+### Added
+
+- **Hover: link to CODEOWNERS rule** - hover tooltip now includes clickable link to the exact line in CODEOWNERS
+- **CLI: `validate-owners`** - validate all owners against GitHub API, shows report of valid/invalid/unknown
+- **CLI: `tree`** - show all files color-coded by owner (uses ANSI colors)
+- **CLI: `completions`** - generate shell completions for bash, zsh, fish, powershell, elvish
+- **CLI uses clap** - proper argument parsing with help, version, and better error messages
+
+### Fixed
+
+- `.git` directory now excluded from file cache (was causing issues with coverage/completions)
+
 ## [0.5.0] - 2026-02-02
 
 ### Added

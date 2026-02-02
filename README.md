@@ -22,6 +22,16 @@ codeowners-cli fmt --write            # Writes in place
 # Auto-fix safe issues
 codeowners-cli fix                    # Preview fixes
 codeowners-cli fix --write            # Apply fixes
+
+# Validate owners against GitHub API
+codeowners-cli validate-owners        # Uses GITHUB_TOKEN env var
+codeowners-cli validate-owners --token ghp_xxx
+
+# Show all files color-coded by owner
+codeowners-cli tree
+
+# Generate shell completions
+codeowners-cli completions bash       # bash, zsh, fish, powershell, elvish
 ```
 
 ## LSP Features
@@ -156,6 +166,10 @@ JSON settings can also be passed via LSP init options (these override TOML confi
 | Hover: clickable GitHub links         | ✅     |
 | Code actions: fix all safe issues     | ✅     |
 | Configurable diagnostic severities    | ✅     |
+| Hover: link to CODEOWNERS rule        | ✅     |
+| CLI: validate-owners                  | ✅     |
+| CLI: tree (color-coded by owner)      | ✅     |
+| CLI: shell completions                | ✅     |
 
 ## License
 
