@@ -1,4 +1,5 @@
 mod check;
+mod config;
 mod coverage;
 mod fix;
 mod fmt;
@@ -7,6 +8,7 @@ mod tree;
 mod validate_owners;
 
 pub use check::check;
+pub use config::config;
 pub use coverage::coverage;
 pub use fix::fix;
 pub use fmt::fmt;

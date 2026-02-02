@@ -72,6 +72,8 @@ enum Commands {
     },
     /// Show all files color-coded by owner
     Tree,
+    /// Show config file paths and merged settings
+    Config,
 }
 
 #[tokio::main]
@@ -95,5 +97,6 @@ async fn main() -> ExitCode {
         }
         Commands::ValidateOwners { token } => commands::validate_owners(&token).await,
         Commands::Tree => commands::tree(),
+        Commands::Config => commands::config(),
     }
 }
