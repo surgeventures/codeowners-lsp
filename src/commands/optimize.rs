@@ -147,11 +147,37 @@ fn find_optimizations(
 ) -> Vec<Optimization> {
     let mut optimizations = Vec::new();
 
-    // 1. Find redundant/shadowed rules (most important - these are dead code)
+    // 1. Find patterns that match no files (dead rules)
+    optimizations.extend(find_no_match_rules(lines, file_cache));
+
+    // 2. Find redundant/shadowed rules (also dead code)
     optimizations.extend(find_redundant_rules(lines));
 
-    // 2. Find directories where ALL children have same owners (safe consolidation)
+    // 3. Find directories where ALL children have same owners (safe consolidation)
     optimizations.extend(find_directory_consolidations(lines, file_cache, options));
+
+    optimizations
+}
+
+/// Find rules with patterns that don't match any files in the repository
+fn find_no_match_rules(lines: &[ParsedLine], file_cache: &FileCache) -> Vec<Optimization> {
+    let mut optimizations = Vec::new();
+
+    for parsed_line in lines {
+        if let CodeownersLine::Rule { pattern, owners } = &parsed_line.content {
+            if !file_cache.has_matches(pattern) {
+                optimizations.push(Optimization {
+                    kind: OptimizationKind::RemoveRedundant,
+                    affected_lines: vec![parsed_line.line_number],
+                    current_patterns: vec![pattern.clone()],
+                    suggested_pattern: String::new(),
+                    owners: owners.clone(),
+                    reason: format!("Pattern '{}' matches no files", pattern),
+                    files_covered: 0,
+                });
+            }
+        }
+    }
 
     optimizations
 }

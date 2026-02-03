@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::file_cache::FileCache;
 use crate::parser::{parse_codeowners_file_with_positions, CodeownersLine};
 use crate::pattern::pattern_matches;
 
@@ -66,8 +67,9 @@ pub struct FixResult {
 }
 
 /// Apply safe fixes to CODEOWNERS content.
-/// Safe fixes: duplicate owners, exact duplicate patterns (shadowed rules)
-pub fn apply_safe_fixes(content: &str) -> FixResult {
+/// Safe fixes: duplicate owners, exact duplicate patterns (shadowed rules),
+/// and patterns matching no files (when file_cache is provided).
+pub fn apply_safe_fixes(content: &str, file_cache: Option<&FileCache>) -> FixResult {
     let lines = parse_codeowners_file_with_positions(content);
     let original_lines: Vec<&str> = content.lines().collect();
 
@@ -111,6 +113,18 @@ pub fn apply_safe_fixes(content: &str) -> FixResult {
                 ));
             }
             exact_patterns.insert(normalized_pattern.to_string(), line_num);
+
+            // Fix 3: Remove patterns that match no files
+            if let Some(cache) = file_cache {
+                if !cache.has_matches(pattern) {
+                    lines_to_delete.insert(line_num);
+                    fixes.push(format!(
+                        "line {}: removed pattern '{}' (matches no files)",
+                        line_num + 1,
+                        pattern
+                    ));
+                }
+            }
         }
     }
 
@@ -160,7 +174,7 @@ mod tests {
     #[test]
     fn test_apply_safe_fixes_duplicate_owners() {
         let content = "*.rs @owner @owner @other\n";
-        let result = apply_safe_fixes(content);
+        let result = apply_safe_fixes(content, None);
         assert_eq!(result.content, "*.rs @owner @other\n");
         assert_eq!(result.fixes.len(), 1);
     }
@@ -168,7 +182,7 @@ mod tests {
     #[test]
     fn test_apply_safe_fixes_shadowed_rules() {
         let content = "*.rs @first\n*.rs @second\n";
-        let result = apply_safe_fixes(content);
+        let result = apply_safe_fixes(content, None);
         assert_eq!(result.content, "*.rs @second\n");
         assert_eq!(result.fixes.len(), 1);
     }

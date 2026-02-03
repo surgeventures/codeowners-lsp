@@ -805,7 +805,7 @@ impl Backend {
         }
 
         // Add "Fix all" source action if there are fixable issues
-        let fix_result = apply_safe_fixes(&content);
+        let fix_result = apply_safe_fixes(&content, None);
         if !fix_result.fixes.is_empty() {
             let line_count = content.lines().count();
             let last_line_len = content.lines().last().map(|l| l.len()).unwrap_or(0);

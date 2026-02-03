@@ -1,7 +1,6 @@
 mod check;
 mod config;
 mod coverage;
-mod fix;
 mod fmt;
 mod lint;
 mod optimize;
@@ -12,7 +11,6 @@ mod validate_owners;
 pub use check::check;
 pub use config::{config, load_settings};
 pub use coverage::coverage;
-pub use fix::fix;
 pub use fmt::fmt;
 pub use lint::lint;
 pub use optimize::{optimize, OptimizeOptions, OutputFormat as OptimizeFormat};

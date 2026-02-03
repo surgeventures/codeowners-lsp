@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.10.5] - 2026-02-03
+
+### Changed
+
+- **`fix` command merged into `lint --fix`** - The standalone `fix` subcommand is now deprecated. Use `lint --fix` instead for auto-fixing safe issues.
+
+### Added
+
+- **Remove patterns matching no files** - Both `lint --fix` and `optimize` now detect and remove patterns that don't match any files in the repository. These are dead rules that serve no purpose.
+
 ## [0.10.4] - 2026-02-03
 
 ### Fixed

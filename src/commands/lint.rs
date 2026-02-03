@@ -11,7 +11,7 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Posit
 use crate::diagnostics;
 use crate::file_cache::FileCache;
 use crate::github::{GitHubClient, PersistentCache};
-use crate::ownership::{find_codeowners, get_repo_root};
+use crate::ownership::{apply_safe_fixes, find_codeowners, get_repo_root};
 use crate::parser::{parse_codeowners_file_with_positions, CodeownersLine};
 
 const CONCURRENCY: usize = 5;
@@ -68,7 +68,7 @@ impl CliConfig {
     }
 }
 
-pub async fn lint(path: Option<PathBuf>, json_output: bool) -> ExitCode {
+pub async fn lint(path: Option<PathBuf>, json_output: bool, fix: bool) -> ExitCode {
     let cwd = env::current_dir().expect("Failed to get current directory");
 
     let codeowners_path = path.unwrap_or_else(|| {
@@ -93,6 +93,44 @@ pub async fn lint(path: Option<PathBuf>, json_output: bool) -> ExitCode {
 
     let repo_root = get_repo_root(&codeowners_path, &cwd);
     let file_cache = FileCache::new(&repo_root);
+
+    // If --fix, apply safe fixes and write
+    if fix {
+        let fix_result = apply_safe_fixes(&content, Some(&file_cache));
+        if fix_result.fixes.is_empty() {
+            println!(
+                "{} {} - no fixable issues",
+                "✓".green(),
+                codeowners_path.display()
+            );
+            return ExitCode::SUCCESS;
+        }
+
+        match fs::write(&codeowners_path, &fix_result.content) {
+            Ok(_) => {
+                println!(
+                    "{} Fixed {} ({} changes):",
+                    "✓".green(),
+                    codeowners_path.display(),
+                    fix_result.fixes.len().to_string().cyan()
+                );
+                for fix_msg in &fix_result.fixes {
+                    println!("  {} {}", "-".green(), fix_msg);
+                }
+                return ExitCode::SUCCESS;
+            }
+            Err(e) => {
+                eprintln!(
+                    "{} Failed to write {}: {}",
+                    "✗".red(),
+                    codeowners_path.display(),
+                    e
+                );
+                return ExitCode::from(1);
+            }
+        }
+    }
+
     let diag_config = diagnostics::DiagnosticConfig::default();
     let (mut diagnostics, _) =
         diagnostics::compute_diagnostics_sync(&content, Some(&file_cache), &diag_config);

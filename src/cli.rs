@@ -35,18 +35,13 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+        /// Auto-fix safe issues (duplicate owners, shadowed rules, no-match patterns)
+        #[arg(long)]
+        fix: bool,
     },
     /// Format CODEOWNERS file (normalizes spacing)
     #[command(alias = "format")]
     Fmt {
-        /// Path to CODEOWNERS file (default: auto-detect)
-        path: Option<PathBuf>,
-        /// Write changes to file (default: dry-run)
-        #[arg(short, long)]
-        write: bool,
-    },
-    /// Auto-fix safe issues (duplicate owners, shadowed rules)
-    Fix {
         /// Path to CODEOWNERS file (default: auto-detect)
         path: Option<PathBuf>,
         /// Write changes to file (default: dry-run)
@@ -110,9 +105,8 @@ async fn main() -> ExitCode {
     let args = Cli::parse();
 
     match args.command {
-        Commands::Lint { path, json } => commands::lint(path, json).await,
+        Commands::Lint { path, json, fix } => commands::lint(path, json, fix).await,
         Commands::Fmt { path, write } => commands::fmt(path, write),
-        Commands::Fix { path, write } => commands::fix(path, write),
         Commands::Check { file } => commands::check(&file),
         Commands::Coverage => commands::coverage(),
         Commands::Completions { shell } => {

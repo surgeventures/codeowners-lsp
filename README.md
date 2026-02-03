@@ -7,7 +7,8 @@ Language server for CODEOWNERS files with diagnostics, navigation, and code acti
 ```zsh
 # Lint CODEOWNERS (auto-detects location)
 codeowners-cli lint
-codeowners-cli lint --json  # Machine-readable output for CI
+codeowners-cli lint --json            # Machine-readable output for CI
+codeowners-cli lint --fix             # Auto-fix safe issues (dupes, shadowed, no-match)
 
 # Check who owns a file
 codeowners-cli check src/main.rs
@@ -22,8 +23,8 @@ codeowners-cli suggest --write                  # Add suggestions to CODEOWNERS
 codeowners-cli suggest --format codeowners      # Ready-to-paste CODEOWNERS lines
 codeowners-cli suggest --min-confidence 50      # Higher confidence threshold
 
-# Optimize CODEOWNERS patterns
-codeowners-cli optimize                         # Preview consolidation opportunities
+# Optimize CODEOWNERS patterns (shadowed rules, no-match, consolidation)
+codeowners-cli optimize                         # Preview optimizations
 codeowners-cli optimize --write                 # Apply optimizations to file
 codeowners-cli optimize --json                  # JSON output for CI
 codeowners-cli optimize --min-files 5           # Require 5+ files for dir consolidation
@@ -31,10 +32,6 @@ codeowners-cli optimize --min-files 5           # Require 5+ files for dir conso
 # Format CODEOWNERS file
 codeowners-cli fmt                    # Prints formatted output
 codeowners-cli fmt --write            # Writes in place
-
-# Auto-fix safe issues
-codeowners-cli fix                    # Preview fixes
-codeowners-cli fix --write            # Apply fixes
 
 # Validate owners against GitHub API
 codeowners-cli validate-owners        # Uses GITHUB_TOKEN env var
@@ -198,7 +195,7 @@ JSON settings can also be passed via LSP init options (these override TOML confi
 | Code actions: remove duplicate owners | ✅     |
 | Code actions: add owner               | ✅     |
 | Code actions: add catch-all           | ✅     |
-| CLI: fix (auto-fix safe issues)       | ✅     |
+| CLI: lint --fix (auto-fix safe issues)| ✅     |
 | LSP: textDocument/formatting          | ✅     |
 | Hover: clickable GitHub links         | ✅     |
 | Code actions: fix all safe issues     | ✅     |
