@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.1] - 2026-02-03
+
+### Added
+
+- **Linux musl builds** - Static binaries for x86_64 and aarch64 musl targets, useful for Alpine Linux and containers.
+
 ## [0.12.0] - 2026-02-03
 
 ### Added
