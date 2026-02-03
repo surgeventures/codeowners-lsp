@@ -459,3 +459,308 @@ fn output_json(optimizations: &[Optimization]) {
 
     println!("{}", serde_json::to_string_pretty(&output).unwrap());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== apply_optimizations tests ====================
+
+    #[test]
+    fn test_apply_optimizations_replaces_in_place() {
+        let content = "src/a.rs @alice\nsrc/b.rs @alice\nsrc/c.rs @alice\n* @default\n";
+
+        let opt = Optimization {
+            kind: OptimizationKind::ConsolidateToDirectory,
+            affected_lines: vec![0, 1, 2],
+            current_patterns: vec![
+                "src/a.rs".to_string(),
+                "src/b.rs".to_string(),
+                "src/c.rs".to_string(),
+            ],
+            suggested_pattern: "src/".to_string(),
+            owners: vec!["@alice".to_string()],
+            reason: "test".to_string(),
+            files_covered: 3,
+        };
+
+        let result = apply_optimizations(content, &[], &[opt]);
+
+        // Should replace first line, delete others, keep catch-all at end
+        assert_eq!(result, "src/ @alice\n* @default\n");
+    }
+
+    #[test]
+    fn test_apply_optimizations_preserves_order_with_catchall() {
+        let content = "# Header\nlib/x.rs @bob\nlib/y.rs @bob\n* @default\n# Footer\n";
+
+        let opt = Optimization {
+            kind: OptimizationKind::ConsolidateToDirectory,
+            affected_lines: vec![1, 2],
+            current_patterns: vec!["lib/x.rs".to_string(), "lib/y.rs".to_string()],
+            suggested_pattern: "lib/".to_string(),
+            owners: vec!["@bob".to_string()],
+            reason: "test".to_string(),
+            files_covered: 2,
+        };
+
+        let result = apply_optimizations(content, &[], &[opt]);
+
+        // Optimized pattern should be where lib/x.rs was, before catch-all
+        assert_eq!(result, "# Header\nlib/ @bob\n* @default\n# Footer\n");
+    }
+
+    #[test]
+    fn test_apply_optimizations_remove_redundant() {
+        let content = "*.rs @rust\n* @default\n*.rs @maintainer\n";
+
+        let opt = Optimization {
+            kind: OptimizationKind::RemoveRedundant,
+            affected_lines: vec![0], // First *.rs is shadowed
+            current_patterns: vec!["*.rs".to_string()],
+            suggested_pattern: String::new(), // No replacement, just delete
+            owners: vec!["@rust".to_string()],
+            reason: "shadowed".to_string(),
+            files_covered: 0,
+        };
+
+        let result = apply_optimizations(content, &[], &[opt]);
+
+        // Should just remove the shadowed line
+        assert_eq!(result, "* @default\n*.rs @maintainer\n");
+    }
+
+    #[test]
+    fn test_apply_optimizations_multiple() {
+        let content = "a.rs @a\nb.rs @a\nc.rs @b\nd.rs @b\n";
+
+        let opts = vec![
+            Optimization {
+                kind: OptimizationKind::UseGlob,
+                affected_lines: vec![0, 1],
+                current_patterns: vec!["a.rs".to_string(), "b.rs".to_string()],
+                suggested_pattern: "*.rs".to_string(),
+                owners: vec!["@a".to_string()],
+                reason: "test".to_string(),
+                files_covered: 2,
+            },
+            Optimization {
+                kind: OptimizationKind::UseGlob,
+                affected_lines: vec![2, 3],
+                current_patterns: vec!["c.rs".to_string(), "d.rs".to_string()],
+                suggested_pattern: "*.rs".to_string(),
+                owners: vec!["@b".to_string()],
+                reason: "test".to_string(),
+                files_covered: 2,
+            },
+        ];
+
+        let result = apply_optimizations(content, &[], &opts);
+
+        // Each group replaced in place
+        assert_eq!(result, "*.rs @a\n*.rs @b\n");
+    }
+
+    #[test]
+    fn test_apply_optimizations_non_contiguous_lines() {
+        // Lines 0, 2, 4 are affected (with comments/other rules in between)
+        let content =
+            "src/a.rs @alice\n# comment\nsrc/b.rs @alice\nother.rs @bob\nsrc/c.rs @alice\n";
+
+        let opt = Optimization {
+            kind: OptimizationKind::ConsolidateToDirectory,
+            affected_lines: vec![0, 2, 4],
+            current_patterns: vec![
+                "src/a.rs".to_string(),
+                "src/b.rs".to_string(),
+                "src/c.rs".to_string(),
+            ],
+            suggested_pattern: "src/".to_string(),
+            owners: vec!["@alice".to_string()],
+            reason: "test".to_string(),
+            files_covered: 3,
+        };
+
+        let result = apply_optimizations(content, &[], &[opt]);
+
+        // First affected line (0) gets replacement, others deleted, unaffected lines preserved
+        assert_eq!(result, "src/ @alice\n# comment\nother.rs @bob\n");
+    }
+
+    #[test]
+    fn test_apply_optimizations_unsorted_affected_lines() {
+        // affected_lines not in order - should still use the lowest line number
+        let content = "line0 @a\nline1 @a\nline2 @a\n";
+
+        let opt = Optimization {
+            kind: OptimizationKind::ConsolidateToDirectory,
+            affected_lines: vec![2, 0, 1], // Deliberately unsorted
+            current_patterns: vec![],
+            suggested_pattern: "combined/".to_string(),
+            owners: vec!["@a".to_string()],
+            reason: "test".to_string(),
+            files_covered: 3,
+        };
+
+        let result = apply_optimizations(content, &[], &[opt]);
+
+        // Should replace line 0 (the lowest), delete 1 and 2
+        assert_eq!(result, "combined/ @a\n");
+    }
+
+    #[test]
+    fn test_apply_optimizations_empty_file() {
+        let content = "";
+        let result = apply_optimizations(content, &[], &[]);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_apply_optimizations_no_optimizations() {
+        let content = "src/ @alice\n* @default\n";
+        let result = apply_optimizations(content, &[], &[]);
+        assert_eq!(result, "src/ @alice\n* @default\n");
+    }
+
+    #[test]
+    fn test_apply_optimizations_preserves_multiple_owners() {
+        let content = "src/a.rs @alice @bob\nsrc/b.rs @alice @bob\n";
+
+        let opt = Optimization {
+            kind: OptimizationKind::ConsolidateToDirectory,
+            affected_lines: vec![0, 1],
+            current_patterns: vec!["src/a.rs".to_string(), "src/b.rs".to_string()],
+            suggested_pattern: "src/".to_string(),
+            owners: vec!["@alice".to_string(), "@bob".to_string()],
+            reason: "test".to_string(),
+            files_covered: 2,
+        };
+
+        let result = apply_optimizations(content, &[], &[opt]);
+        assert_eq!(result, "src/ @alice @bob\n");
+    }
+
+    #[test]
+    fn test_apply_optimizations_complex_real_world() {
+        // Simulates a real CODEOWNERS with sections, comments, catch-all
+        let content = r#"# Frontend
+/src/components/Button.tsx @frontend
+/src/components/Modal.tsx @frontend
+/src/components/Form.tsx @frontend
+
+# Backend
+/api/users.rs @backend
+/api/auth.rs @backend
+
+# Catch-all
+* @maintainers
+"#;
+
+        let opts = vec![
+            Optimization {
+                kind: OptimizationKind::ConsolidateToDirectory,
+                affected_lines: vec![1, 2, 3],
+                current_patterns: vec![
+                    "/src/components/Button.tsx".to_string(),
+                    "/src/components/Modal.tsx".to_string(),
+                    "/src/components/Form.tsx".to_string(),
+                ],
+                suggested_pattern: "/src/components/".to_string(),
+                owners: vec!["@frontend".to_string()],
+                reason: "test".to_string(),
+                files_covered: 3,
+            },
+            Optimization {
+                kind: OptimizationKind::ConsolidateToDirectory,
+                affected_lines: vec![6, 7],
+                current_patterns: vec!["/api/users.rs".to_string(), "/api/auth.rs".to_string()],
+                suggested_pattern: "/api/".to_string(),
+                owners: vec!["@backend".to_string()],
+                reason: "test".to_string(),
+                files_covered: 2,
+            },
+        ];
+
+        let result = apply_optimizations(content, &[], &opts);
+
+        let expected = r#"# Frontend
+/src/components/ @frontend
+
+# Backend
+/api/ @backend
+
+# Catch-all
+* @maintainers
+"#;
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_apply_optimizations_single_line_delete() {
+        let content = "keep.rs @a\ndelete.rs @b\nkeep2.rs @c\n";
+
+        let opt = Optimization {
+            kind: OptimizationKind::RemoveRedundant,
+            affected_lines: vec![1],
+            current_patterns: vec!["delete.rs".to_string()],
+            suggested_pattern: String::new(),
+            owners: vec!["@b".to_string()],
+            reason: "test".to_string(),
+            files_covered: 0,
+        };
+
+        let result = apply_optimizations(content, &[], &[opt]);
+        assert_eq!(result, "keep.rs @a\nkeep2.rs @c\n");
+    }
+
+    // ==================== find_redundant_rules tests ====================
+
+    fn make_parsed_line(line_number: u32, pattern: &str, owners: Vec<&str>) -> ParsedLine {
+        ParsedLine {
+            line_number,
+            content: CodeownersLine::Rule {
+                pattern: pattern.to_string(),
+                owners: owners.into_iter().map(|s| s.to_string()).collect(),
+            },
+            pattern_start: 0,
+            pattern_end: pattern.len() as u32,
+            owners_start: pattern.len() as u32 + 1,
+        }
+    }
+
+    #[test]
+    fn test_find_redundant_rules_duplicate_pattern() {
+        let lines = vec![
+            make_parsed_line(0, "*.rs", vec!["@first"]),
+            make_parsed_line(1, "*.rs", vec!["@second"]),
+        ];
+
+        let result = find_redundant_rules(&lines);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].affected_lines, vec![0]); // First one is shadowed
+        assert_eq!(result[0].kind, OptimizationKind::RemoveRedundant);
+    }
+
+    #[test]
+    fn test_find_redundant_rules_normalized_pattern() {
+        // /src/foo and src/foo should be treated as duplicates
+        let lines = vec![
+            make_parsed_line(0, "/src/foo", vec!["@first"]),
+            make_parsed_line(1, "src/foo", vec!["@second"]),
+        ];
+
+        let result = find_redundant_rules(&lines);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_find_redundant_rules_no_duplicates() {
+        let lines = vec![
+            make_parsed_line(0, "*.rs", vec!["@rust"]),
+            make_parsed_line(1, "*.ts", vec!["@ts"]),
+        ];
+
+        let result = find_redundant_rules(&lines);
+        assert!(result.is_empty());
+    }
+}
