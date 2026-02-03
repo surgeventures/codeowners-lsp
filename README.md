@@ -127,9 +127,12 @@ team = "@org/team-name"
 github_token = "env:GITHUB_TOKEN"
 validate_owners = false
 
-# Lookup command for `suggest` - resolves git emails to team names (experimental)
-# Use {email} as placeholder, output is fuzzy-matched against existing CODEOWNERS owners
-# lookup_cmd = "your-tool lookup {email} --json | jq -r .team"
+# Suggest command settings
+[suggest]
+# Resolve git emails to team names (required for suggest to work)
+lookup_cmd = "your-tool lookup {email} | jq -r .team"
+# Prepend / to paths (anchored patterns)
+anchored = true
 
 # Diagnostic severity overrides
 # Values: "off", "hint", "info", "warning", "error"
@@ -161,15 +164,32 @@ JSON settings can also be passed via LSP init options (these override TOML confi
 }
 ```
 
-| Option            | Description                                                                    |
-| ----------------- | ------------------------------------------------------------------------------ |
-| `path`            | Custom CODEOWNERS location (relative to workspace root)                        |
-| `individual`      | Your GitHub handle for "take ownership" actions                                |
-| `team`            | Your team's handle for "take ownership" actions                                |
-| `github_token`    | GitHub token for owner validation. Use `env:VAR_NAME` to read from environment |
-| `validate_owners` | Enable GitHub API validation of @user and @org/team (default: false)           |
-| `lookup_cmd`      | Command to resolve git emails to teams for `suggest` (use `{email}` placeholder) |
-| `diagnostics`     | Map of diagnostic code to severity override                                    |
+| Option               | Description                                                                    |
+| -------------------- | ------------------------------------------------------------------------------ |
+| `path`               | Custom CODEOWNERS location (relative to workspace root)                        |
+| `individual`         | Your GitHub handle for "take ownership" actions                                |
+| `team`               | Your team's handle for "take ownership" actions                                |
+| `github_token`       | GitHub token for owner validation. Use `env:VAR_NAME` to read from environment |
+| `validate_owners`    | Enable GitHub API validation of @user and @org/team (default: false)           |
+| `[suggest]`          | Settings for the `suggest` command                                             |
+| `suggest.lookup_cmd` | Command to resolve git emails to teams (use `{email}` placeholder)             |
+| `suggest.anchored`   | Prepend `/` to paths for anchored patterns (default: false)                    |
+| `[diagnostics]`      | Map of diagnostic code to severity override                                    |
+
+## Diagnostics
+
+| Code                     | Default   | Description                                                                 |
+| ------------------------ | --------- | --------------------------------------------------------------------------- |
+| `invalid-pattern`        | error     | Pattern has invalid glob syntax                                             |
+| `invalid-owner`          | error     | Owner format invalid (must be `@user`, `@org/team`, or email)               |
+| `pattern-no-match`       | warning   | Pattern doesn't match any files in the repository                           |
+| `duplicate-owner`        | warning   | Same owner listed multiple times on one rule                                |
+| `shadowed-rule`          | warning   | Rule is shadowed by a later rule (dead code, last match wins)               |
+| `no-owners`              | hint      | Rule has a pattern but no owners assigned                                   |
+| `unowned-files`          | info      | Summary diagnostic showing count of files without owners                    |
+| `github-owner-not-found` | warning   | Owner not found on GitHub (requires `validate_owners = true`)               |
+
+Override severities in config with: `off`, `hint`, `info`, `warning`, `error`
 
 ## Feature Status
 

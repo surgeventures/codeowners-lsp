@@ -10,6 +10,17 @@ use serde::Deserialize;
 const CONFIG_FILE: &str = ".codeowners-lsp.toml";
 const CONFIG_FILE_LOCAL: &str = ".codeowners-lsp.local.toml";
 
+/// Settings for the suggest command
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SuggestSettings {
+    /// Command to lookup team from email
+    /// Use {email} as placeholder, e.g.: "your-tool lookup {email} | jq -r .team"
+    pub lookup_cmd: Option<String>,
+    /// Prepend / to paths (anchored patterns)
+    #[serde(default)]
+    pub anchored: bool,
+}
+
 #[derive(Debug, Default, Deserialize, Clone)]
 pub struct Settings {
     path: Option<String>,
@@ -20,15 +31,19 @@ pub struct Settings {
     validate_owners: bool,
     #[serde(default)]
     diagnostics: HashMap<String, String>,
-    /// Command to lookup team from email (for suggest command)
-    /// Use {email} as placeholder, e.g.: "houston who is {email} --json | jq .team -r"
-    lookup_cmd: Option<String>,
+    #[serde(default)]
+    suggest: SuggestSettings,
 }
 
 impl Settings {
     /// Get the lookup command template if configured
     pub fn lookup_cmd(&self) -> Option<&str> {
-        self.lookup_cmd.as_deref()
+        self.suggest.lookup_cmd.as_deref()
+    }
+
+    /// Get whether to use anchored paths in suggestions
+    pub fn suggest_anchored(&self) -> bool {
+        self.suggest.anchored
     }
 
     fn merge(&mut self, other: Settings) {
@@ -50,8 +65,11 @@ impl Settings {
         for (k, v) in other.diagnostics {
             self.diagnostics.insert(k, v);
         }
-        if other.lookup_cmd.is_some() {
-            self.lookup_cmd = other.lookup_cmd;
+        if other.suggest.lookup_cmd.is_some() {
+            self.suggest.lookup_cmd = other.suggest.lookup_cmd;
+        }
+        if other.suggest.anchored {
+            self.suggest.anchored = true;
         }
     }
 }
@@ -191,8 +209,14 @@ fn print_settings_brief(settings: &Settings) {
             format!("{} rules", settings.diagnostics.len()).cyan()
         );
     }
-    if settings.lookup_cmd.is_some() {
-        println!("           {} {}", "lookup_cmd:".dimmed(), "(set)".cyan());
+    if settings.suggest.lookup_cmd.is_some() || settings.suggest.anchored {
+        println!("           {} ", "[suggest]".dimmed());
+        if settings.suggest.lookup_cmd.is_some() {
+            println!("             {} {}", "lookup_cmd:".dimmed(), "(set)".cyan());
+        }
+        if settings.suggest.anchored {
+            println!("             {} true", "anchored:".dimmed());
+        }
     }
 }
 
@@ -260,11 +284,18 @@ fn print_settings(settings: &Settings) {
         }
     }
 
-    // lookup_cmd
-    print!("  {:<18} ", "lookup_cmd:".cyan());
-    match &settings.lookup_cmd {
+    // suggest section
+    println!("  {}", "[suggest]".cyan());
+    print!("    {:<16} ", "lookup_cmd:".cyan());
+    match &settings.suggest.lookup_cmd {
         Some(cmd) => println!("{}", cmd.yellow()),
         None => println!("{}", "(not set)".dimmed()),
+    }
+    print!("    {:<16} ", "anchored:".cyan());
+    if settings.suggest.anchored {
+        println!("{}", "true".green());
+    } else {
+        println!("{}", "false".dimmed());
     }
 }
 

@@ -124,13 +124,17 @@ pub fn suggest(options: SuggestOptions) -> ExitCode {
                 "Error:".red().bold()
             );
             eprintln!("  Add to .codeowners-lsp.toml:");
+            eprintln!("{}", "  [suggest]".dimmed());
             eprintln!(
                 "  {}",
-                "lookup_cmd = \"your-tool lookup {email} | jq -r .team\"".dimmed()
+                "  lookup_cmd = \"your-tool lookup {email} | jq -r .team\"".dimmed()
             );
             return ExitCode::from(1);
         }
     };
+
+    // Use anchored from config if not set via CLI
+    let anchored = options.anchored || settings.suggest_anchored();
 
     // Extract existing owners from CODEOWNERS for fuzzy matching
     let existing_owners: Vec<String> = lines
@@ -185,8 +189,8 @@ pub fn suggest(options: SuggestOptions) -> ExitCode {
 
             s.suggested_owner = best_team;
 
-            // Prepend / if anchored option is set
-            if options.anchored && !s.path.starts_with('/') {
+            // Prepend / if anchored option is set (CLI or config)
+            if anchored && !s.path.starts_with('/') {
                 s.path = format!("/{}", s.path);
             }
 
