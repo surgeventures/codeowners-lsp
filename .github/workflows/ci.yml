@@ -55,7 +55,7 @@ jobs:
   check-version:
     name: Check Version
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: [check, clippy, fmt, test]
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
