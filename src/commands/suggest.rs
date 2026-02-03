@@ -44,6 +44,8 @@ pub struct SuggestOptions {
     pub include_owned: bool,
     /// Write suggestions to CODEOWNERS file
     pub write: bool,
+    /// Prepend / to paths (anchored patterns)
+    pub anchored: bool,
 }
 
 impl Default for SuggestOptions {
@@ -54,6 +56,7 @@ impl Default for SuggestOptions {
             limit: 50,
             include_owned: false,
             write: false,
+            anchored: false,
         }
     }
 }
@@ -181,6 +184,12 @@ pub fn suggest(options: SuggestOptions) -> ExitCode {
                 .map(|(team, _)| team)?;
 
             s.suggested_owner = best_team;
+
+            // Prepend / if anchored option is set
+            if options.anchored && !s.path.starts_with('/') {
+                s.path = format!("/{}", s.path);
+            }
+
             Some(s)
         })
         .collect();

@@ -22,6 +22,7 @@ codeowners-cli suggest                          # Preview suggestions
 codeowners-cli suggest --write                  # Add suggestions to CODEOWNERS
 codeowners-cli suggest --format codeowners      # Ready-to-paste CODEOWNERS lines
 codeowners-cli suggest --min-confidence 50      # Higher confidence threshold
+codeowners-cli suggest --anchored               # Use /path instead of path
 
 # Optimize CODEOWNERS patterns (shadowed rules, no-match, consolidation)
 codeowners-cli optimize                         # Preview optimizations

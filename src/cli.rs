@@ -85,6 +85,9 @@ enum Commands {
         /// Write suggestions to CODEOWNERS file
         #[arg(short, long)]
         write: bool,
+        /// Prepend / to paths (anchored patterns like /src/ instead of src/)
+        #[arg(long)]
+        anchored: bool,
     },
     /// Suggest optimizations to simplify CODEOWNERS patterns
     Optimize {
@@ -126,6 +129,7 @@ async fn main() -> ExitCode {
             format,
             limit,
             write,
+            anchored,
         } => {
             let format = match format.to_lowercase().as_str() {
                 "json" => commands::SuggestFormat::Json,
@@ -138,6 +142,7 @@ async fn main() -> ExitCode {
                 limit,
                 include_owned: false,
                 write,
+                anchored,
             })
         }
         Commands::Optimize {

@@ -1,14 +1,20 @@
 # Changelog
 
+## [0.10.6] - 2026-02-03
+
+### Added
+
+- **`suggest --anchored`** - Option to prepend `/` to suggested paths, creating anchored patterns like `/src/` instead of `src/`.
+
 ## [0.10.5] - 2026-02-03
 
 ### Changed
 
-- **`fix` command merged into `lint --fix`** - The standalone `fix` subcommand is now deprecated. Use `lint --fix` instead for auto-fixing safe issues.
+- **`fix` command removed** - Use `lint --fix` instead.
 
 ### Added
 
-- **Remove patterns matching no files** - Both `lint --fix` and `optimize` now detect and remove patterns that don't match any files in the repository. These are dead rules that serve no purpose.
+- **Remove patterns matching no files** - Both `lint --fix` and `optimize` now detect and remove patterns that don't match any files in the repository.
 
 ## [0.10.4] - 2026-02-03
 
