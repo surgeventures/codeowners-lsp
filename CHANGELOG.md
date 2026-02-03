@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.2] - 2026-02-03
+
+### Known Bugs
+
+- **File diagnostics don't update with content changes** - Diagnostics for non-CODEOWNERS files can get stuck (e.g. highlighting half the file after adding lines)
+- **Code actions intermittently disappear** - Actions sometimes appear once then stop showing. Seems to affect `.toml` config files more than others - may be IDE-related
+
+### Ideas / Future
+
+- **Snazzier coverage output** - Colors, maybe a graph
+- **Lint: show full uncovered files list** - Currently shows a summary, should show complete list
+
 ## [0.12.1] - 2026-02-03
 
 ### Added
