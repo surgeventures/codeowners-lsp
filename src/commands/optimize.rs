@@ -377,42 +377,59 @@ fn output_human(optimizations: &[Optimization]) {
 }
 
 /// Apply optimizations to generate new file content
+/// Replaces the first affected line with the optimized pattern, deletes the rest
 fn apply_optimizations(
     content: &str,
     _lines: &[ParsedLine],
     optimizations: &[Optimization],
 ) -> String {
-    // Track which lines to skip (affected by optimizations)
-    let lines_to_skip: std::collections::HashSet<u32> = optimizations
-        .iter()
-        .flat_map(|o| o.affected_lines.clone())
-        .collect();
+    use std::collections::HashMap;
 
-    let mut result = String::new();
-    let mut added_optimizations = false;
+    // Build a map of line_num -> replacement (if any)
+    // For each optimization, the FIRST affected line gets the replacement,
+    // other affected lines are deleted (mapped to None)
+    let mut line_actions: HashMap<u32, Option<String>> = HashMap::new();
 
-    // Output original lines, skipping affected ones
-    for (i, line) in content.lines().enumerate() {
-        let line_num = i as u32;
-        if lines_to_skip.contains(&line_num) {
+    for opt in optimizations {
+        if opt.affected_lines.is_empty() {
             continue;
         }
-        result.push_str(line);
-        result.push('\n');
+
+        // Sort affected lines to find the first one
+        let mut sorted_lines = opt.affected_lines.clone();
+        sorted_lines.sort();
+
+        // First affected line gets the replacement (if there is one)
+        if !opt.suggested_pattern.is_empty() {
+            let replacement = format!("{} {}", opt.suggested_pattern, opt.owners.join(" "));
+            line_actions.insert(sorted_lines[0], Some(replacement));
+        } else {
+            // No replacement (e.g., RemoveRedundant) - just delete
+            line_actions.insert(sorted_lines[0], None);
+        }
+
+        // Rest of affected lines are deleted
+        for &line_num in &sorted_lines[1..] {
+            line_actions.insert(line_num, None);
+        }
     }
 
-    // Add new optimized patterns at the end
-    for opt in optimizations {
-        if !opt.suggested_pattern.is_empty() {
-            if !added_optimizations {
-                result.push_str("\n# Optimized patterns\n");
-                added_optimizations = true;
+    // Build result
+    let mut result = String::new();
+    for (i, line) in content.lines().enumerate() {
+        let line_num = i as u32;
+
+        if let Some(action) = line_actions.get(&line_num) {
+            // This line is affected by an optimization
+            if let Some(replacement) = action {
+                result.push_str(replacement);
+                result.push('\n');
             }
-            result.push_str(&format!(
-                "{} {}\n",
-                opt.suggested_pattern,
-                opt.owners.join(" ")
-            ));
+            // else: line is deleted, skip it
+        } else {
+            // Keep original line
+            result.push_str(line);
+            result.push('\n');
         }
     }
 
