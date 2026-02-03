@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.10.4] - 2026-02-03
+
+### Fixed
+
+- **`optimize --write` now works in single pass** - Fixed bug where directory consolidation would create new patterns that were immediately shadowed by catch-all rules like `*`. Consolidations are now skipped if the resulting pattern would be shadowed, eliminating the need for multiple passes.
+
 ## [0.10.3] - 2026-02-03
 
 ### Fixed

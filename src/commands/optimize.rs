@@ -162,6 +162,7 @@ fn find_optimizations(
 /// 1. ALL files in a directory are explicitly listed with rules
 /// 2. ALL those rules have the EXACT same owners
 /// 3. There are at least `min_files_for_dir` files
+/// 4. The consolidated pattern would NOT be shadowed by a later rule
 ///
 /// The consolidated pattern is placed at the FIRST affected line position.
 #[allow(clippy::type_complexity)]
@@ -170,9 +171,21 @@ fn find_directory_consolidations(
     file_cache: &FileCache,
     options: &OptimizeOptions,
 ) -> Vec<Optimization> {
-    use crate::pattern::pattern_matches;
+    use crate::pattern::{pattern_matches, pattern_subsumes};
 
     let mut optimizations = Vec::new();
+
+    // Collect ALL rules for shadow checking
+    let all_rules: Vec<(u32, &str)> = lines
+        .iter()
+        .filter_map(|line| {
+            if let CodeownersLine::Rule { pattern, .. } = &line.content {
+                Some((line.line_number, pattern.as_str()))
+            } else {
+                None
+            }
+        })
+        .collect();
 
     // Collect all explicit file rules (not globs, not directories)
     let file_rules: Vec<(u32, &str, &[String], bool)> = lines
@@ -262,6 +275,21 @@ fn find_directory_consolidations(
             format!("{}/", dir)
         };
 
+        // Find the LAST line number of the rules being consolidated
+        let last_affected_line = rules.iter().map(|(l, _, _, _)| *l).max().unwrap_or(0);
+
+        // Check if the consolidated pattern would be shadowed by any LATER rule
+        let would_be_shadowed = all_rules
+            .iter()
+            .filter(|(line_num, _)| *line_num > last_affected_line)
+            .any(|(_, later_pattern)| pattern_subsumes(&suggested_pattern, later_pattern));
+
+        if would_be_shadowed {
+            // Don't suggest consolidation - the individual files will be marked
+            // as redundant anyway, and we'd just be creating a new shadowed rule
+            continue;
+        }
+
         optimizations.push(Optimization {
             kind: OptimizationKind::ConsolidateToDirectory,
             affected_lines: rules.iter().map(|(l, _, _, _)| *l).collect(),
@@ -283,10 +311,12 @@ fn find_directory_consolidations(
 /// - `docs/ @a` followed by `* @b` → docs/ is dead
 /// - `/src/auth/ @a` followed by `/src/ @b` → /src/auth/ is dead
 /// - Duplicate patterns: first occurrence is dead
+///
+/// Works backwards from end of file. Assumes ALL rules are shadowed by default,
+/// then "rescues" rules that are NOT subsumed by any later pattern.
 fn find_redundant_rules(lines: &[ParsedLine]) -> Vec<Optimization> {
     use crate::pattern::pattern_subsumes;
-
-    let mut optimizations = Vec::new();
+    use std::collections::{HashMap, HashSet};
 
     // Collect all rules with their line numbers
     let rules: Vec<(u32, &str, &[String])> = lines
@@ -300,17 +330,48 @@ fn find_redundant_rules(lines: &[ParsedLine]) -> Vec<Optimization> {
         })
         .collect();
 
-    // For each rule, check if any LATER rule subsumes it
-    for (i, (line_num, pattern, owners)) in rules.iter().enumerate() {
-        for (later_line_num, later_pattern, _) in rules.iter().skip(i + 1) {
+    // Start with ALL rules marked for deletion
+    let mut to_delete: HashSet<u32> = rules.iter().map(|(line_num, _, _)| *line_num).collect();
+
+    // Track which pattern shadows each rule (for error messages)
+    let mut shadow_info: HashMap<u32, (u32, String)> = HashMap::new();
+
+    // Work backwards, building up "later_patterns" as we go
+    let mut later_patterns: Vec<(u32, &str)> = Vec::new();
+
+    for (line_num, pattern, _) in rules.iter().rev() {
+        // Check if this pattern is subsumed by ANY later pattern
+        let mut shadowed_by: Option<(u32, &str)> = None;
+        for (later_line_num, later_pattern) in &later_patterns {
             if pattern_subsumes(pattern, later_pattern) {
-                let reason = if pattern.trim_start_matches('/')
-                    == later_pattern.trim_start_matches('/')
-                    && pattern.starts_with('/') == later_pattern.starts_with('/')
+                shadowed_by = Some((*later_line_num, *later_pattern));
+                break;
+            }
+        }
+
+        if let Some((later_line, later_pat)) = shadowed_by {
+            // Pattern IS subsumed - keep it marked for deletion, record shadow info
+            shadow_info.insert(*line_num, (later_line, later_pat.to_string()));
+        } else {
+            // Pattern is NOT subsumed - rescue it from deletion
+            to_delete.remove(line_num);
+        }
+
+        // Always add to later_patterns (even if subsumed, it can still shadow earlier rules)
+        later_patterns.push((*line_num, *pattern));
+    }
+
+    // Convert to optimizations
+    let mut optimizations = Vec::new();
+    for (line_num, pattern, owners) in &rules {
+        if to_delete.contains(line_num) {
+            let reason = if let Some((later_line, later_pat)) = shadow_info.get(line_num) {
+                if pattern.trim_start_matches('/') == later_pat.trim_start_matches('/')
+                    && pattern.starts_with('/') == later_pat.starts_with('/')
                 {
                     format!(
                         "Duplicate pattern - line {} shadows line {}",
-                        later_line_num + 1,
+                        later_line + 1,
                         line_num + 1
                     )
                 } else {
@@ -318,22 +379,24 @@ fn find_redundant_rules(lines: &[ParsedLine]) -> Vec<Optimization> {
                         "Pattern '{}' on line {} is shadowed by '{}' on line {}",
                         pattern,
                         line_num + 1,
-                        later_pattern,
-                        later_line_num + 1
+                        later_pat,
+                        later_line + 1
                     )
-                };
+                }
+            } else {
+                // Shouldn't happen, but fallback
+                format!("Pattern '{}' on line {} is shadowed", pattern, line_num + 1)
+            };
 
-                optimizations.push(Optimization {
-                    kind: OptimizationKind::RemoveRedundant,
-                    affected_lines: vec![*line_num],
-                    current_patterns: vec![pattern.to_string()],
-                    suggested_pattern: String::new(),
-                    owners: owners.to_vec(),
-                    reason,
-                    files_covered: 0,
-                });
-                break; // Only report first shadowing rule
-            }
+            optimizations.push(Optimization {
+                kind: OptimizationKind::RemoveRedundant,
+                affected_lines: vec![*line_num],
+                current_patterns: vec![pattern.to_string()],
+                suggested_pattern: String::new(),
+                owners: owners.to_vec(),
+                reason,
+                files_covered: 0,
+            });
         }
     }
 
@@ -842,5 +905,81 @@ mod tests {
 
         let result = find_redundant_rules(&lines);
         assert!(result.is_empty()); // Nothing is shadowed when ordered correctly
+    }
+
+    #[test]
+    fn test_find_redundant_rules_complex_with_catchall() {
+        // Simulate real-world CODEOWNERS with many diverse patterns ending in catch-all
+        // This tests the scenario where optimize --write needed 2 passes
+        let lines = vec![
+            // Patterns without owners (ignored/generated files)
+            make_parsed_line(0, "**/.env.*", vec![]),
+            make_parsed_line(1, "*.mo", vec![]),
+            make_parsed_line(2, "*.po", vec![]),
+            // Extension patterns
+            make_parsed_line(3, "*.jpg", vec!["@design"]),
+            make_parsed_line(4, "*.png", vec!["@design"]),
+            // Anchored directories
+            make_parsed_line(5, "/.github/workflows/", vec!["@devops"]),
+            make_parsed_line(6, "/src/apps/helpers/", vec!["@platform"]),
+            make_parsed_line(7, "/src/apps/platform/", vec!["@platform"]),
+            // Anchored exact paths
+            make_parsed_line(8, "/README.md", vec!["@docs"]),
+            make_parsed_line(9, "/src/mix.exs", vec!["@core"]),
+            // Unanchored directories
+            make_parsed_line(10, "docs/", vec!["@docs"]),
+            make_parsed_line(11, "test/", vec!["@qa"]),
+            // Nested anchored directories
+            make_parsed_line(12, "/src/apps/helpers/lib/", vec!["@helpers"]),
+            make_parsed_line(13, "/src/apps/platform/lib/", vec!["@platform-lib"]),
+            // Catch-all at the end - shadows EVERYTHING above
+            make_parsed_line(14, "*", vec!["@default"]),
+        ];
+
+        let result = find_redundant_rules(&lines);
+
+        // ALL 14 patterns before * should be detected as shadowed
+        assert_eq!(
+            result.len(),
+            14,
+            "Expected 14 shadowed rules, got: {} - lines: {:?}",
+            result.len(),
+            result.iter().map(|o| &o.affected_lines).collect::<Vec<_>>()
+        );
+
+        // Verify each line is marked
+        for line in 0..14 {
+            assert!(
+                result.iter().any(|o| o.affected_lines == vec![line]),
+                "Line {} should be marked as shadowed",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn test_find_redundant_rules_intermediate_shadowing() {
+        // Test case where A is shadowed by B, and B is also shadowed by C
+        // Both A and B should be detected in a single pass
+        let lines = vec![
+            make_parsed_line(0, "/src/apps/helpers/lib/config/", vec!["@config"]),
+            make_parsed_line(1, "/src/apps/helpers/lib/", vec!["@lib"]),
+            make_parsed_line(2, "/src/apps/helpers/", vec!["@helpers"]),
+            make_parsed_line(3, "/src/apps/", vec!["@apps"]),
+            make_parsed_line(4, "/src/", vec!["@src"]),
+            make_parsed_line(5, "*", vec!["@default"]),
+        ];
+
+        let result = find_redundant_rules(&lines);
+
+        // All 5 patterns before * should be detected
+        // Even though there's a chain of subsumption
+        assert_eq!(
+            result.len(),
+            5,
+            "Expected 5 shadowed rules, got: {} - reasons: {:?}",
+            result.len(),
+            result.iter().map(|o| &o.reason).collect::<Vec<_>>()
+        );
     }
 }
