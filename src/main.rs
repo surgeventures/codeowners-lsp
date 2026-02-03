@@ -19,7 +19,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use diagnostics::{compute_diagnostics_sync, DiagnosticConfig};
-use file_cache::{is_internally_ignored, FileCache};
+use file_cache::FileCache;
 use github::{GitHubClient, PersistentCache};
 use ownership::{apply_safe_fixes, check_file_ownership};
 use parser::{
@@ -466,25 +466,6 @@ impl Backend {
         // Skip CODEOWNERS file itself
         if self.is_codeowners_file(uri) {
             return Vec::new();
-        }
-
-        // Skip LSP's own config files
-        let relative_path = {
-            let root = self.workspace_root.read().unwrap();
-            if let Some(root) = root.as_ref() {
-                uri.to_file_path().ok().and_then(|p| {
-                    p.strip_prefix(root)
-                        .ok()
-                        .map(|r| r.to_string_lossy().to_string())
-                })
-            } else {
-                None
-            }
-        };
-        if let Some(ref path) = relative_path {
-            if is_internally_ignored(path) {
-                return Vec::new();
-            }
         }
 
         // Check if this diagnostic is enabled

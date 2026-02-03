@@ -1,26 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
-use ignore::WalkBuilder;
 use rayon::prelude::*;
 
 use crate::parser::{CodeownersLine, ParsedLine};
 use crate::pattern::{pattern_matches, CompiledPattern};
-
-/// Check if a path is internally ignored (gitignored files that shouldn't need owners)
-pub fn is_internally_ignored(path: &str) -> bool {
-    // Cache directory
-    if path.starts_with(".codeowners-lsp/") || path.contains("/.codeowners-lsp/") {
-        return true;
-    }
-    // Local config (user-specific, gitignored)
-    if path == ".codeowners-lsp.local.toml" || path.ends_with("/.codeowners-lsp.local.toml") {
-        return true;
-    }
-    false
-}
 
 /// Check if characters in needle appear in order in haystack (fuzzy match)
 fn fuzzy_match(haystack: &str, needle: &str) -> bool {
@@ -48,32 +35,19 @@ pub struct FileCache {
 }
 
 impl FileCache {
+    /// Create a new FileCache using git ls-files to get tracked files
     pub fn new(root: &PathBuf) -> Self {
-        let mut files = Vec::new();
-
-        let walker = WalkBuilder::new(root)
-            .hidden(false) // Include dotfiles like .github/
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .filter_entry(|e| {
-                let name = e.file_name().to_string_lossy();
-                // Exclude .git directory and LSP internal directories
-                name != ".git" && name != ".codeowners-lsp"
+        let files = Command::new("git")
+            .args(["ls-files", "--cached", "--others", "--exclude-standard"])
+            .current_dir(root)
+            .output()
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(|s| s.to_string())
+                    .collect()
             })
-            .build();
-
-        for entry in walker.flatten() {
-            if entry.file_type().is_some_and(|ft| ft.is_file()) {
-                if let Ok(relative) = entry.path().strip_prefix(root) {
-                    let path = relative.to_string_lossy().to_string();
-                    // Skip internally ignored files
-                    if !is_internally_ignored(&path) {
-                        files.push(path);
-                    }
-                }
-            }
-        }
+            .unwrap_or_default();
 
         Self {
             files,
@@ -336,21 +310,37 @@ impl FileCache {
 mod tests {
     use super::*;
     use std::fs::{self, File};
+    use std::process::Command;
     use tempfile::tempdir;
 
-    fn create_test_files(dir: &std::path::Path) {
+    fn create_test_repo(dir: &std::path::Path) {
+        // Init git repo
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+
+        // Create files
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::create_dir_all(dir.join("docs")).unwrap();
         File::create(dir.join("src/main.rs")).unwrap();
         File::create(dir.join("src/lib.rs")).unwrap();
         File::create(dir.join("docs/readme.md")).unwrap();
         File::create(dir.join("Cargo.toml")).unwrap();
+
+        // Add to git
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir)
+            .output()
+            .unwrap();
     }
 
     #[test]
     fn test_file_cache_creation() {
         let dir = tempdir().unwrap();
-        create_test_files(dir.path());
+        create_test_repo(dir.path());
 
         let cache = FileCache::new(&dir.path().to_path_buf());
         assert_eq!(cache.files.len(), 4);
@@ -359,7 +349,7 @@ mod tests {
     #[test]
     fn test_count_matches() {
         let dir = tempdir().unwrap();
-        create_test_files(dir.path());
+        create_test_repo(dir.path());
 
         let cache = FileCache::new(&dir.path().to_path_buf());
         assert_eq!(cache.count_matches("*.rs"), 2);
@@ -371,7 +361,7 @@ mod tests {
     #[test]
     fn test_get_unowned_files() {
         let dir = tempdir().unwrap();
-        create_test_files(dir.path());
+        create_test_repo(dir.path());
 
         let cache = FileCache::new(&dir.path().to_path_buf());
 
@@ -394,7 +384,7 @@ mod tests {
     #[test]
     fn test_all_files_owned() {
         let dir = tempdir().unwrap();
-        create_test_files(dir.path());
+        create_test_repo(dir.path());
 
         let cache = FileCache::new(&dir.path().to_path_buf());
 
