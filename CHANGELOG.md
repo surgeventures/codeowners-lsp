@@ -6,7 +6,9 @@
 
 - **CLI `lint` now respects diagnostic config** - Diagnostic severity overrides from `.codeowners-lsp.toml` now work in CLI, not just LSP.
 
-- **`file-not-owned` vs `no-owners` are now distinct** - Previously both cases showed `file-not-owned`. Now:
+- **File discovery now uses `git ls-files`** - Switched from walking filesystem with ignore rules to using git's index. Only git-tracked files are considered for pattern matching and coverage. Fixes `.codeowners-lsp.toml` being incorrectly excluded from ownership checks.
+
+- **`file-not-owned` vs `no-owners` are now distinct** - Previously both cases showed the same error. Now:
   - `file-not-owned` (default: error) - No CODEOWNERS rule matches the file
   - `no-owners` (default: hint) - A rule matches but has no owners specified
   
