@@ -279,10 +279,8 @@ pub fn compute_diagnostics_sync(
             // Track this pattern
             exact_patterns.insert(normalized_pattern.to_string(), parsed_line.line_number);
 
-            // Only track patterns that could potentially subsume others
-            if normalized_pattern.contains('*') || normalized_pattern.ends_with('/') {
-                subsume_patterns.push((normalized_pattern.to_string(), parsed_line.line_number));
-            }
+            // Track ALL patterns for shadowing detection - any pattern can be shadowed by * or **
+            subsume_patterns.push((pattern.to_string(), parsed_line.line_number));
 
             // Check for rules without owners
             if owners.is_empty() {
@@ -491,6 +489,31 @@ mod tests {
         assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::WARNING));
         assert!(diagnostics[0].message.contains("shadowed"));
         assert_eq!(diagnostics[0].range.start.line, 0); // First rule is shadowed
+    }
+
+    #[test]
+    fn test_catchall_shadows_everything() {
+        // Classic footgun: catch-all at end shadows ALL previous rules
+        let content = "/src/foo.rs @team1\ndocs/ @team2\n*.rs @team3\n* @default";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        // All 3 rules before * should be shadowed
+        let shadowed: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("shadowed"))
+            .collect();
+        assert_eq!(
+            shadowed.len(),
+            3,
+            "Expected 3 shadowed rules, got: {:?}",
+            shadowed
+        );
+
+        // Check that lines 0, 1, 2 are marked as shadowed
+        let shadowed_lines: Vec<u32> = shadowed.iter().map(|d| d.range.start.line).collect();
+        assert!(shadowed_lines.contains(&0), "Line 0 should be shadowed");
+        assert!(shadowed_lines.contains(&1), "Line 1 should be shadowed");
+        assert!(shadowed_lines.contains(&2), "Line 2 should be shadowed");
     }
 
     #[test]

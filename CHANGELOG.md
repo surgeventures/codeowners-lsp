@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.10.1] - 2026-02-03
+
+### Fixed
+
+- **LSP diagnostics now detect all shadowed rules** - Previously only tracked wildcards/directories for shadowing detection, missing exact file patterns like `/src/foo.rs` being shadowed by `*`
+
 ## [0.10.0] - 2026-02-03
 
 ### Fixed - Critical Pattern Matching Overhaul
