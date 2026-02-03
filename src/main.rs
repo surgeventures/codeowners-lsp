@@ -5,6 +5,7 @@ mod handlers;
 mod ownership;
 mod parser;
 mod pattern;
+mod settings;
 mod validation;
 
 use std::collections::{HashMap, HashSet};
@@ -13,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use codeowners::Owners;
-use serde::Deserialize;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -28,54 +28,7 @@ use parser::{
     CodeownersLine,
 };
 use pattern::pattern_matches;
-
-#[derive(Debug, Default, Deserialize)]
-struct Settings {
-    /// Custom path to CODEOWNERS file (relative to workspace root)
-    path: Option<String>,
-    /// Individual owner identifier (e.g. @username)
-    individual: Option<String>,
-    /// Team owner identifier (e.g. @org/team-name)
-    team: Option<String>,
-    /// GitHub token for validating owners (reads from env if prefixed with "env:")
-    github_token: Option<String>,
-    /// Whether to validate owners against GitHub API
-    #[serde(default)]
-    validate_owners: bool,
-    /// Diagnostic severity overrides (code -> "off"|"hint"|"info"|"warning"|"error")
-    #[serde(default)]
-    diagnostics: HashMap<String, String>,
-}
-
-impl Settings {
-    /// Merge another Settings into this one (other takes precedence for set values)
-    fn merge(&mut self, other: Settings) {
-        if other.path.is_some() {
-            self.path = other.path;
-        }
-        if other.individual.is_some() {
-            self.individual = other.individual;
-        }
-        if other.team.is_some() {
-            self.team = other.team;
-        }
-        if other.github_token.is_some() {
-            self.github_token = other.github_token;
-        }
-        if other.validate_owners {
-            self.validate_owners = true;
-        }
-        // Merge diagnostics (other overwrites same keys)
-        for (k, v) in other.diagnostics {
-            self.diagnostics.insert(k, v);
-        }
-    }
-
-    /// Get DiagnosticConfig from settings
-    fn diagnostic_config(&self) -> DiagnosticConfig {
-        DiagnosticConfig::from_map(&self.diagnostics)
-    }
-}
+use settings::{load_settings_from_path, Settings, CONFIG_FILE, CONFIG_FILE_LOCAL};
 
 struct Backend {
     client: Client,
@@ -88,10 +41,6 @@ struct Backend {
     /// Track open documents to refresh diagnostics when CODEOWNERS changes
     open_documents: RwLock<HashMap<Url, String>>,
 }
-
-/// Config file names
-const CONFIG_FILE: &str = ".codeowners-lsp.toml";
-const CONFIG_FILE_LOCAL: &str = ".codeowners-lsp.local.toml";
 
 impl Backend {
     fn new(client: Client) -> Self {
@@ -108,44 +57,17 @@ impl Backend {
     }
 
     /// Load settings from TOML config files in the workspace
-    /// Priority: defaults < .codeowners-lsp.toml < .codeowners-lsp.local.toml
     fn load_config_files(&self) -> Settings {
         let root = self.workspace_root.read().unwrap();
-        let Some(root) = root.as_ref() else {
-            return Settings::default();
-        };
-
-        let mut settings = Settings::default();
-
-        // Load project config
-        let config_path = root.join(CONFIG_FILE);
-        if let Ok(content) = fs::read_to_string(&config_path) {
-            if let Ok(file_settings) = toml::from_str::<Settings>(&content) {
-                settings.merge(file_settings);
-            }
+        match root.as_ref() {
+            Some(root) => load_settings_from_path(root),
+            None => Settings::default(),
         }
-
-        // Load local config (user overrides)
-        let local_config_path = root.join(CONFIG_FILE_LOCAL);
-        if let Ok(content) = fs::read_to_string(&local_config_path) {
-            if let Ok(file_settings) = toml::from_str::<Settings>(&content) {
-                settings.merge(file_settings);
-            }
-        }
-
-        settings
     }
 
     /// Get the GitHub token from settings (resolving env: prefix)
     fn get_github_token(&self) -> Option<String> {
-        let settings = self.settings.read().unwrap();
-        settings.github_token.as_ref().and_then(|token| {
-            if let Some(env_var) = token.strip_prefix("env:") {
-                std::env::var(env_var).ok()
-            } else {
-                Some(token.clone())
-            }
-        })
+        self.settings.read().unwrap().resolve_token()
     }
 
     /// Load CODEOWNERS - runs in blocking thread pool
@@ -390,7 +312,11 @@ impl Backend {
         owners.into_iter().collect()
     }
 
-    fn get_owners_for_file(&self, uri: &Url) -> Option<String> {
+    /// Ownership status for a file
+    /// - `None` = no CODEOWNERS rule matches this file
+    /// - `Some(None)` = a rule matches but has no owners
+    /// - `Some(Some(owners))` = a rule matches with owners
+    fn get_ownership_status(&self, uri: &Url) -> Option<Option<String>> {
         let root = self.workspace_root.read().unwrap();
         let root = root.as_ref()?;
 
@@ -400,14 +326,19 @@ impl Backend {
         let codeowners = self.codeowners.read().unwrap();
         let codeowners = codeowners.as_ref()?;
 
+        // .of() returns None if no rule matches, Some(vec) if a rule matches
         let owners = codeowners.of(relative_path)?;
         let owner_strs: Vec<String> = owners.iter().map(|o| o.to_string()).collect();
 
         if owner_strs.is_empty() {
-            None
+            Some(None) // Rule matches but no owners
         } else {
-            Some(owner_strs.join(" "))
+            Some(Some(owner_strs.join(" "))) // Rule matches with owners
         }
+    }
+
+    fn get_owners_for_file(&self, uri: &Url) -> Option<String> {
+        self.get_ownership_status(uri).flatten()
     }
 
     /// Compute diagnostics for the CODEOWNERS file
@@ -468,23 +399,41 @@ impl Backend {
             return Vec::new();
         }
 
-        // Check if this diagnostic is enabled
         let config = {
             let settings = self.settings.read().unwrap();
             settings.diagnostic_config()
         };
 
-        let Some(severity) = config.get(
-            diagnostics::codes::FILE_NOT_OWNED,
-            DiagnosticSeverity::ERROR,
-        ) else {
-            return Vec::new(); // Disabled
+        // Check ownership status:
+        // - None = no rule matches (file-not-owned)
+        // - Some(None) = rule matches but no owners (no-owners)
+        // - Some(Some(_)) = rule matches with owners (no diagnostic)
+        let ownership = self.get_ownership_status(uri);
+
+        let (code, message, default_severity) = match ownership {
+            Some(Some(_)) => return Vec::new(), // Has owners, no diagnostic
+            Some(None) => {
+                // Rule matches but no owners specified
+                (
+                    diagnostics::codes::NO_OWNERS,
+                    "matched by rule with no owners",
+                    DiagnosticSeverity::HINT,
+                )
+            }
+            None => {
+                // No rule matches this file
+                (
+                    diagnostics::codes::FILE_NOT_OWNED,
+                    "has no CODEOWNERS entry",
+                    DiagnosticSeverity::ERROR,
+                )
+            }
         };
 
-        // Check if file has owners
-        if self.get_owners_for_file(uri).is_some() {
-            return Vec::new(); // Has owners, no diagnostic
-        }
+        // Check if this diagnostic is enabled
+        let Some(severity) = config.get(code, default_severity) else {
+            return Vec::new(); // Disabled
+        };
 
         // Get relative path for message
         let relative_path = {
@@ -515,11 +464,9 @@ impl Backend {
                 },
             },
             severity: Some(severity),
-            code: Some(NumberOrString::String(
-                diagnostics::codes::FILE_NOT_OWNED.to_string(),
-            )),
+            code: Some(NumberOrString::String(code.to_string())),
             source: Some("codeowners".to_string()),
-            message: format!("File '{}' has no CODEOWNERS entry", path_display),
+            message: format!("File '{}' {}", path_display, message),
             ..Default::default()
         }]
     }

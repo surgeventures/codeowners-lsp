@@ -5,7 +5,6 @@ use std::{env, fs};
 
 use colored::Colorize;
 use futures::stream::{self, StreamExt};
-use serde::Deserialize;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 
 use crate::diagnostics;
@@ -13,60 +12,9 @@ use crate::file_cache::FileCache;
 use crate::github::{GitHubClient, PersistentCache};
 use crate::ownership::{apply_safe_fixes, find_codeowners, get_repo_root};
 use crate::parser::{parse_codeowners_file_with_positions, CodeownersLine};
+use crate::settings::load_settings_from_path;
 
 const CONCURRENCY: usize = 5;
-
-/// CLI config (subset of LSP settings)
-#[derive(Debug, Default, Deserialize)]
-struct CliConfig {
-    github_token: Option<String>,
-    #[serde(default)]
-    validate_owners: bool,
-}
-
-impl CliConfig {
-    fn load(repo_root: &std::path::Path) -> Self {
-        let mut config = Self::default();
-
-        // Load .codeowners-lsp.toml
-        let config_path = repo_root.join(".codeowners-lsp.toml");
-        if let Ok(content) = fs::read_to_string(&config_path) {
-            if let Ok(file_config) = toml::from_str::<CliConfig>(&content) {
-                if file_config.github_token.is_some() {
-                    config.github_token = file_config.github_token;
-                }
-                if file_config.validate_owners {
-                    config.validate_owners = true;
-                }
-            }
-        }
-
-        // Load .codeowners-lsp.local.toml (overrides)
-        let local_path = repo_root.join(".codeowners-lsp.local.toml");
-        if let Ok(content) = fs::read_to_string(&local_path) {
-            if let Ok(file_config) = toml::from_str::<CliConfig>(&content) {
-                if file_config.github_token.is_some() {
-                    config.github_token = file_config.github_token;
-                }
-                if file_config.validate_owners {
-                    config.validate_owners = true;
-                }
-            }
-        }
-
-        config
-    }
-
-    fn resolve_token(&self) -> Option<String> {
-        self.github_token.as_ref().and_then(|token| {
-            if let Some(env_var) = token.strip_prefix("env:") {
-                std::env::var(env_var).ok()
-            } else {
-                Some(token.clone())
-            }
-        })
-    }
-}
 
 pub async fn lint(path: Option<PathBuf>, json_output: bool, fix: bool) -> ExitCode {
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -131,14 +79,15 @@ pub async fn lint(path: Option<PathBuf>, json_output: bool, fix: bool) -> ExitCo
         }
     }
 
-    let diag_config = diagnostics::DiagnosticConfig::default();
+    // Load config from file
+    let settings = load_settings_from_path(&repo_root);
+    let diag_config = settings.diagnostic_config();
     let (mut diagnostics, _) =
         diagnostics::compute_diagnostics_sync(&content, Some(&file_cache), &diag_config);
 
-    // Load config and check if validation is enabled
-    let config = CliConfig::load(&repo_root);
-    if config.validate_owners {
-        if let Some(token) = config.resolve_token() {
+    // Check if validation is enabled
+    if settings.validate_owners {
+        if let Some(token) = settings.resolve_token() {
             let validation_diags = validate_owners_for_lint(&content, &repo_root, &token).await;
             diagnostics.extend(validation_diags);
         }

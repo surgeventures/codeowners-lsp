@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.11.1] - 2026-02-03
+
+### Fixed
+
+- **CLI `lint` now respects diagnostic config** - Diagnostic severity overrides from `.codeowners-lsp.toml` now work in CLI, not just LSP.
+
+- **`file-not-owned` vs `no-owners` are now distinct** - Previously both cases showed `file-not-owned`. Now:
+  - `file-not-owned` (default: error) - No CODEOWNERS rule matches the file
+  - `no-owners` (default: hint) - A rule matches but has no owners specified
+  
+  This allows disabling one without the other:
+  ```toml
+  [diagnostics]
+  no-owners = "off"        # Don't warn about catch-all rules with no owners
+  file-not-owned = "error" # Still error on files with no matching rule
+  ```
+
+### Changed
+
+- **Internal: Unified settings module** - CLI and LSP now share config loading code.
+
 ## [0.11.0] - 2026-02-03
 
 ### Changed

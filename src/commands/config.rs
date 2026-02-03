@@ -1,78 +1,14 @@
-use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use colored::Colorize;
-use serde::Deserialize;
+
+use crate::settings::{load_settings_from_path, Settings};
 
 const CONFIG_FILE: &str = ".codeowners-lsp.toml";
 const CONFIG_FILE_LOCAL: &str = ".codeowners-lsp.local.toml";
-
-/// Settings for the suggest command
-#[derive(Debug, Default, Deserialize, Clone)]
-pub struct SuggestSettings {
-    /// Command to lookup team from email
-    /// Use {email} as placeholder, e.g.: "your-tool lookup {email} | jq -r .team"
-    pub lookup_cmd: Option<String>,
-    /// Prepend / to paths (anchored patterns)
-    #[serde(default)]
-    pub anchored: bool,
-}
-
-#[derive(Debug, Default, Deserialize, Clone)]
-pub struct Settings {
-    path: Option<String>,
-    individual: Option<String>,
-    team: Option<String>,
-    github_token: Option<String>,
-    #[serde(default)]
-    validate_owners: bool,
-    #[serde(default)]
-    diagnostics: HashMap<String, String>,
-    #[serde(default)]
-    suggest: SuggestSettings,
-}
-
-impl Settings {
-    /// Get the lookup command template if configured
-    pub fn lookup_cmd(&self) -> Option<&str> {
-        self.suggest.lookup_cmd.as_deref()
-    }
-
-    /// Get whether to use anchored paths in suggestions
-    pub fn suggest_anchored(&self) -> bool {
-        self.suggest.anchored
-    }
-
-    fn merge(&mut self, other: Settings) {
-        if other.path.is_some() {
-            self.path = other.path;
-        }
-        if other.individual.is_some() {
-            self.individual = other.individual;
-        }
-        if other.team.is_some() {
-            self.team = other.team;
-        }
-        if other.github_token.is_some() {
-            self.github_token = other.github_token;
-        }
-        if other.validate_owners {
-            self.validate_owners = true;
-        }
-        for (k, v) in other.diagnostics {
-            self.diagnostics.insert(k, v);
-        }
-        if other.suggest.lookup_cmd.is_some() {
-            self.suggest.lookup_cmd = other.suggest.lookup_cmd;
-        }
-        if other.suggest.anchored {
-            self.suggest.anchored = true;
-        }
-    }
-}
 
 struct ConfigSource {
     path: PathBuf,
@@ -100,13 +36,7 @@ pub fn config() -> ExitCode {
     print_config_source("Local", &local_config);
 
     // Compute merged config
-    let mut merged = Settings::default();
-    if let Some(ref settings) = project_config.settings {
-        merged.merge(settings.clone());
-    }
-    if let Some(ref settings) = local_config.settings {
-        merged.merge(settings.clone());
-    }
+    let merged = load_settings_from_path(&cwd);
 
     // Print merged config
     println!();
@@ -297,22 +227,4 @@ fn print_settings(settings: &Settings) {
     } else {
         println!("{}", "false".dimmed());
     }
-}
-
-/// Load merged settings from config files
-pub fn load_settings() -> Settings {
-    let cwd = env::current_dir().unwrap_or_default();
-    let config_path = cwd.join(CONFIG_FILE);
-    let local_config_path = cwd.join(CONFIG_FILE_LOCAL);
-
-    let mut merged = Settings::default();
-
-    if let Some(settings) = load_config(&config_path).settings {
-        merged.merge(settings);
-    }
-    if let Some(settings) = load_config(&local_config_path).settings {
-        merged.merge(settings);
-    }
-
-    merged
 }

@@ -16,8 +16,7 @@ use crate::file_cache::FileCache;
 use crate::lookup::OwnerLookup;
 use crate::ownership::{find_codeowners, get_repo_root};
 use crate::parser::{self, find_insertion_point_with_owner, CodeownersLine};
-
-use super::load_settings;
+use crate::settings::load_settings;
 
 /// Output format for suggestions
 #[derive(Debug, Clone, Copy, PartialEq)]

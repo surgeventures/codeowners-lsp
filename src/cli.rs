@@ -7,6 +7,7 @@ mod lookup;
 mod ownership;
 mod parser;
 mod pattern;
+mod settings;
 #[allow(dead_code)]
 mod validation;
 

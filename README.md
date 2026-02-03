@@ -186,6 +186,7 @@ JSON settings can also be passed via LSP init options (these override TOML confi
 | `duplicate-owner`        | warning   | Same owner listed multiple times on one rule                                |
 | `shadowed-rule`          | warning   | Rule is shadowed by a later rule (dead code, last match wins)               |
 | `no-owners`              | hint      | Rule has a pattern but no owners assigned                                   |
+| `file-not-owned`         | error     | File has no matching CODEOWNERS rule (shown on non-CODEOWNERS files)        |
 | `unowned-files`          | info      | Summary diagnostic showing count of files without owners                    |
 | `github-owner-not-found` | warning   | Owner not found on GitHub (requires `validate_owners = true`)               |
 

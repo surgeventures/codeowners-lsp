@@ -33,7 +33,6 @@ pub struct DiagnosticConfig {
 impl DiagnosticConfig {
     /// Create config from a map of code -> severity string
     /// Valid severities: "off", "hint", "info", "warning", "error"
-    #[allow(dead_code)] // Used by LSP only
     pub fn from_map(map: &HashMap<String, String>) -> Self {
         let mut severities = HashMap::new();
         for (code, severity_str) in map {
@@ -53,7 +52,6 @@ impl DiagnosticConfig {
 
 /// Parse a severity string into DiagnosticSeverity
 /// Returns None for "off" (disabled)
-#[allow(dead_code)] // Used by LSP only
 fn parse_severity(s: &str) -> Option<DiagnosticSeverity> {
     match s.to_lowercase().as_str() {
         "off" | "none" | "disable" | "disabled" => None,
