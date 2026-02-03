@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.10.3] - 2026-02-03
+
+### Fixed
+
+- **Catch-all `*` now correctly shadows ALL previous rules** - Fixed bug where duplicate catch-all detection prevented subsumption checks, so `* @default` at end of file now properly marks all previous rules as shadowed
+
 ## [0.10.2] - 2026-02-03
 
 ### Fixed

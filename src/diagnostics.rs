@@ -194,7 +194,6 @@ pub fn compute_diagnostics_sync(
             let normalized_pattern = pattern.trim_start_matches('/');
 
             // Fast path: check for exact duplicates via HashMap
-            let is_exact_duplicate = exact_patterns.contains_key(normalized_pattern);
             if let Some(&prev_line) = exact_patterns.get(normalized_pattern) {
                 if let Some(severity) =
                     config.get(codes::SHADOWED_RULE, DiagnosticSeverity::WARNING)
@@ -241,15 +240,23 @@ pub fn compute_diagnostics_sync(
                 }
             }
 
-            // Only check subsumption if current pattern could subsume others
-            // (wildcards, directories, catch-alls) - skip exact file patterns for performance
+            // Check subsumption if current pattern could subsume others
+            // (wildcards, directories) - these can shadow earlier rules
             let could_subsume = pattern.contains('*') || pattern.ends_with('/');
 
-            if could_subsume && !is_exact_duplicate {
+            if could_subsume {
                 if let Some(severity) =
                     config.get(codes::SHADOWED_RULE, DiagnosticSeverity::WARNING)
                 {
                     for (prev_pattern, prev_line) in &subsume_patterns {
+                        // Skip if this is the same line (exact duplicate already reported)
+                        if *prev_line == parsed_line.line_number {
+                            continue;
+                        }
+                        // Skip exact duplicates - already reported above
+                        if prev_pattern.trim_start_matches('/') == pattern.trim_start_matches('/') {
+                            continue;
+                        }
                         if pattern_subsumes(prev_pattern, pattern) {
                             diagnostics.push(Diagnostic {
                                 range: Range {
@@ -516,6 +523,34 @@ mod tests {
         assert!(shadowed_lines.contains(&0), "Line 0 should be shadowed");
         assert!(shadowed_lines.contains(&1), "Line 1 should be shadowed");
         assert!(shadowed_lines.contains(&2), "Line 2 should be shadowed");
+    }
+
+    #[test]
+    fn test_catchall_shadows_mixed_patterns() {
+        // Real-world case: mix of exact paths, directories, wildcards, then catch-all
+        let content = r#"* @first-catchall
+src/apps/foo/lib/generated @team1
+src/apps/foo/priv/gettext/ @team2
+/.github/ @team3
+/deploy @team4
+* @final-catchall"#;
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        let shadowed: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("shadowed"))
+            .collect();
+
+        // ALL 5 rules before final * should be shadowed
+        assert_eq!(
+            shadowed.len(),
+            5,
+            "Expected 5 shadowed rules, got: {:?}",
+            shadowed
+                .iter()
+                .map(|d| (&d.message, d.range.start.line))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
