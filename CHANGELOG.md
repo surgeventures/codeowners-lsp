@@ -34,6 +34,17 @@ The `optimize` command now uses the corrected pattern engine:
 
 - **Removed risky glob suggestions** - No longer suggests `*.rs` patterns that might match unintended files
 
+### Added - `suggest` command with `lookup_cmd`
+
+- **`lookup_cmd` config option** - External command to resolve email → team/owner
+  ```toml
+  lookup_cmd = "your-tool lookup {email} | jq -r .team"
+  ```
+- **Parallel lookups** - Batch email resolution with progress bar
+- **Weighted voting** - Aggregates contributors' teams by commit count
+- **Fuzzy matching** - Matches lookup results against existing CODEOWNERS owners
+- **`--write` flag** - Adds suggestions directly to CODEOWNERS at smart insertion points
+
 ### Added - 51 new pattern conformance tests
 
 Comprehensive test suite covering all GitHub CODEOWNERS behaviors:
