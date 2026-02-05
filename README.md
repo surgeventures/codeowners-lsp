@@ -99,7 +99,7 @@ jobs:
       - name: Install codeowners-cli
         run: |
           gh release download --repo surgeventures/codeowners-lsp \
-            --pattern '*linux-x64-musl*' --output - | tar xz -C /usr/local/bin
+            --pattern '*x86_64-unknown-linux-musl*' --output - | tar xz -C /usr/local/bin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

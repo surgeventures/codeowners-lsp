@@ -64,7 +64,7 @@ jobs:
 
   # Matrix build (only if version changed)
   build:
-    name: Build ${{ matrix.name }}
+    name: Build ${{ matrix.target }}
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ${{ matrix.runner }}
@@ -72,24 +72,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: linux-x64-gnu
+          - target: x86_64-unknown-linux-gnu
             runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
-            target: x86_64-unknown-linux-gnu
-          - name: linux-arm64-gnu
+          - target: aarch64-unknown-linux-gnu
             runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
-            target: aarch64-unknown-linux-gnu
-          - name: linux-x64-musl
+          - target: x86_64-unknown-linux-musl
             runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
-            target: x86_64-unknown-linux-musl
-          - name: linux-arm64-musl
+          - target: aarch64-unknown-linux-musl
             runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
-            target: aarch64-unknown-linux-musl
-          - name: darwin-x64
+          - target: x86_64-apple-darwin
             runner: macos-14
-            target: x86_64-apple-darwin
-          - name: darwin-arm64
+          - target: aarch64-apple-darwin
             runner: macos-14
-            target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -97,7 +91,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools
-        if: contains(matrix.name, '-musl')
+        if: contains(matrix.target, '-musl')
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends musl-tools
@@ -112,12 +106,12 @@ jobs:
       - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../${{ env.BINARY_NAME }}-${{ matrix.name }}.tar.gz ${{ env.BINARY_NAME }} codeowners-cli
+          tar -czvf ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }} codeowners-cli
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.BINARY_NAME }}-${{ matrix.name }}
-          path: ${{ env.BINARY_NAME }}-${{ matrix.name }}.tar.gz
+          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
+          path: ${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz
 
   # Create release (only if builds succeeded)
   release:
