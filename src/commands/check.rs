@@ -11,6 +11,7 @@ use crate::ownership::{check_file_ownership, find_codeowners};
 
 #[derive(Serialize)]
 struct CheckResultJson {
+    owned: bool,
     rule: Option<String>,
     line: Option<u32>,
     owners: Vec<String>,
@@ -80,11 +81,13 @@ fn output_json(content: &str, files: &[String]) -> ExitCode {
             file_path,
             match result {
                 Some(r) => CheckResultJson {
+                    owned: true,
                     rule: Some(r.pattern),
                     line: Some(r.line_number + 1),
                     owners: r.owners,
                 },
                 None => CheckResultJson {
+                    owned: false,
                     rule: None,
                     line: None,
                     owners: vec![],

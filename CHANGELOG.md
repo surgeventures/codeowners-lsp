@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.14.1] - 2026-02-05
+
+### Changed
+
+- **`check --json` now includes `owned` field** - Distinguishes between files with no matching rule (`owned: false`) and files matching a rule with no owners (`owned: true, owners: []`):
+  ```json
+  {"src/main.rs": {"owned": true, "rule": "*", "line": 1, "owners": ["@team"]}}
+  {"untracked.rs": {"owned": false, "rule": null, "line": null, "owners": []}}
+  ```
+
 ## [0.14.0] - 2026-02-05
 
 ### Added
