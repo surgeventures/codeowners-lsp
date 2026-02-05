@@ -217,4 +217,121 @@ mod tests {
 
         assert_eq!(lookup.fuzzy_match("frontend"), None);
     }
+
+    #[test]
+    fn test_fuzzy_match_case_insensitive() {
+        let lookup = OwnerLookup::new("echo test", vec!["@org/Platform-Team".to_string()]);
+
+        assert_eq!(
+            lookup.fuzzy_match("platform-team"),
+            Some("@org/Platform-Team".to_string())
+        );
+        assert_eq!(
+            lookup.fuzzy_match("PLATFORM-TEAM"),
+            Some("@org/Platform-Team".to_string())
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_match_user_format() {
+        let lookup = OwnerLookup::new(
+            "echo test",
+            vec!["@username".to_string(), "@org/team".to_string()],
+        );
+
+        assert_eq!(
+            lookup.fuzzy_match("username"),
+            Some("@username".to_string())
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_match_empty_owners() {
+        let lookup = OwnerLookup::new("echo test", vec![]);
+        assert_eq!(lookup.fuzzy_match("anything"), None);
+    }
+
+    #[test]
+    fn test_fuzzy_match_exact_takes_priority() {
+        let lookup = OwnerLookup::new(
+            "echo test",
+            vec![
+                "@org/platform-extended".to_string(),
+                "@org/platform".to_string(),
+            ],
+        );
+
+        // Exact match "@org/platform" should be found for "platform" since
+        // exact matching (with @ prefix) is checked first
+        assert_eq!(
+            lookup.fuzzy_match("@org/platform"),
+            Some("@org/platform".to_string())
+        );
+
+        // "platform" matches both via contains, picks first in list
+        assert_eq!(
+            lookup.fuzzy_match("platform"),
+            Some("@org/platform-extended".to_string())
+        );
+    }
+
+    #[test]
+    fn test_owner_lookup_new() {
+        let lookup = OwnerLookup::new(
+            "my-cmd {email}",
+            vec!["@owner1".to_string(), "@owner2".to_string()],
+        );
+
+        assert_eq!(lookup.cmd_template, "my-cmd {email}");
+        assert_eq!(lookup.existing_owners.len(), 2);
+        assert!(lookup.cache.is_empty());
+    }
+
+    #[test]
+    fn test_owner_lookup_cache_behavior() {
+        let mut lookup = OwnerLookup::new(
+            "echo '@org/team'", // Simple command that returns a team
+            vec!["@org/team".to_string()],
+        );
+
+        // First lookup - should run command and cache
+        let result1 = lookup.lookup("test@example.com");
+        assert!(lookup.cache.contains_key("test@example.com"));
+
+        // Second lookup - should use cache (same result)
+        let result2 = lookup.lookup("test@example.com");
+        assert_eq!(result1, result2);
+    }
+
+    #[test]
+    fn test_fuzzy_match_partial_team_name() {
+        let lookup = OwnerLookup::new(
+            "echo test",
+            vec![
+                "@mycompany/frontend-web".to_string(),
+                "@mycompany/backend-api".to_string(),
+            ],
+        );
+
+        // "frontend" should match "@mycompany/frontend-web"
+        assert_eq!(
+            lookup.fuzzy_match("frontend"),
+            Some("@mycompany/frontend-web".to_string())
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_match_with_at_prefix() {
+        let lookup = OwnerLookup::new("echo test", vec!["@org/devops".to_string()]);
+
+        // Both with and without @ should work
+        assert_eq!(
+            lookup.fuzzy_match("devops"),
+            Some("@org/devops".to_string())
+        );
+        assert_eq!(
+            lookup.fuzzy_match("@devops"),
+            Some("@org/devops".to_string())
+        );
+    }
 }

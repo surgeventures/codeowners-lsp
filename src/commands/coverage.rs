@@ -312,16 +312,16 @@ mod tests {
 
         let lines = render_tree(&files);
 
-        // Should have directory entries with counts
+        // Should have directory entries with counts (ANSI codes between name and /)
         assert!(lines
             .iter()
-            .any(|l| l.contains("src/") && l.contains("3 files")));
+            .any(|l| l.contains("src") && l.contains("3 files")));
         assert!(lines
             .iter()
-            .any(|l| l.contains("handlers/") && l.contains("2 files")));
+            .any(|l| l.contains("handlers") && l.contains("2 files")));
         assert!(lines
             .iter()
-            .any(|l| l.contains("config/") && l.contains("1 file")));
+            .any(|l| l.contains("config") && l.contains("1 file")));
 
         // Should have file entries
         assert!(lines.iter().any(|l| l.contains("main.rs")));

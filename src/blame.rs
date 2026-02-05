@@ -262,4 +262,110 @@ mod tests {
         assert_eq!(suggestion.contributors[0].name, "Alice");
         assert_eq!(suggestion.contributors[0].commit_count, 10);
     }
+
+    #[test]
+    fn test_parse_shortlog_single_contributor() {
+        let output = "   100\tSolo Dev <solo@example.com>\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        assert_eq!(suggestion.total_commits, 100);
+        assert_eq!(suggestion.contributors.len(), 1);
+        assert_eq!(suggestion.contributors[0].email, "solo@example.com");
+        assert_eq!(suggestion.contributors[0].percentage, 100.0);
+        // High confidence with 100% ownership and 100 commits
+        assert!(suggestion.confidence > 90.0);
+    }
+
+    #[test]
+    fn test_parse_shortlog_empty() {
+        let output = "";
+        let result = parse_shortlog_output(output, "file.rs");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_shortlog_whitespace_only() {
+        let output = "   \n   \n";
+        let result = parse_shortlog_output(output, "file.rs");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_shortlog_malformed_line() {
+        // Missing tab separator
+        let output = "10 Alice <alice@example.com>\n";
+        let result = parse_shortlog_output(output, "file.rs");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_shortlog_no_email() {
+        let output = "    5\tJust A Name\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        assert_eq!(suggestion.contributors.len(), 1);
+        assert_eq!(suggestion.contributors[0].name, "Just A Name");
+        assert_eq!(suggestion.contributors[0].email, "");
+    }
+
+    #[test]
+    fn test_parse_shortlog_sorting() {
+        // Bob has more commits, should be first
+        let output = "     5\tAlice <alice@example.com>\n    20\tBob <bob@example.com>\n     3\tCharlie <charlie@example.com>\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        assert_eq!(suggestion.contributors[0].name, "Bob");
+        assert_eq!(suggestion.contributors[0].commit_count, 20);
+        assert_eq!(suggestion.contributors[1].name, "Alice");
+        assert_eq!(suggestion.contributors[2].name, "Charlie");
+    }
+
+    #[test]
+    fn test_parse_shortlog_percentage_calculation() {
+        let output = "    75\tMajority <maj@example.com>\n    25\tMinority <min@example.com>\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        assert_eq!(suggestion.contributors[0].percentage, 75.0);
+        assert_eq!(suggestion.contributors[1].percentage, 25.0);
+    }
+
+    #[test]
+    fn test_parse_shortlog_confidence_low_commits() {
+        // Only 2 commits - low volume factor
+        let output = "     2\tDev <dev@example.com>\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        // 100% ownership but only 2 commits, confidence should be moderate
+        assert!(suggestion.confidence < 80.0);
+    }
+
+    #[test]
+    fn test_parse_shortlog_confidence_split_ownership() {
+        // 50/50 split - lower confidence
+        let output = "    50\tAlice <alice@example.com>\n    50\tBob <bob@example.com>\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        // Only 50% top contributor, confidence should be lower
+        assert!(suggestion.confidence < 70.0);
+    }
+
+    #[test]
+    fn test_parse_shortlog_path_preserved() {
+        let output = "    10\tDev <dev@example.com>\n";
+        let suggestion = parse_shortlog_output(output, "src/deep/nested/file.rs").unwrap();
+
+        assert_eq!(suggestion.path, "src/deep/nested/file.rs");
+    }
+
+    #[test]
+    fn test_contributor_stats_fields() {
+        let output = "   42\tTest User <test.user@company.com>\n";
+        let suggestion = parse_shortlog_output(output, "test.rs").unwrap();
+
+        let contrib = &suggestion.contributors[0];
+        assert_eq!(contrib.email, "test.user@company.com");
+        assert_eq!(contrib.name, "Test User");
+        assert_eq!(contrib.commit_count, 42);
+        assert_eq!(contrib.percentage, 100.0);
+    }
 }

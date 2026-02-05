@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.14.2] - 2026-02-05
+
+### Added
+
+- **`lint --json` includes `pattern` and `owners`** - Diagnostics now include rule context:
+
+  ```json
+  {
+    "code": "pattern-no-match",
+    "line": 5,
+    "message": "Pattern matches no files",
+    "pattern": "/src/old/**",
+    "owners": ["@org/team"]
+  }
+  ```
+
+- **`validate-owners --json` includes reasons** - Invalid/unknown owners now include why:
+  ```json
+  {
+    "valid": ["@org/team"],
+    "invalid": [{ "owner": "@bad", "reason": "not found on GitHub" }],
+    "unknown": [{ "owner": "email@x.com", "reason": "email, can't validate" }]
+  }
+  ```
+
 ## [0.14.1] - 2026-02-05
 
 ### Changed

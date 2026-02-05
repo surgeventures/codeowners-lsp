@@ -20,19 +20,19 @@ const CONCURRENCY: usize = 5;
 #[derive(Debug)]
 enum ValidationResult {
     Valid(String),
-    Invalid(String),
+    Invalid(String, &'static str),
     Unknown(String, &'static str),
 }
 
 #[derive(Serialize)]
 struct ValidateOwnersJson {
     valid: Vec<String>,
-    invalid: Vec<String>,
-    unknown: Vec<UnknownOwner>,
+    invalid: Vec<InvalidOwner>,
+    unknown: Vec<InvalidOwner>,
 }
 
 #[derive(Serialize)]
-struct UnknownOwner {
+struct InvalidOwner {
     owner: String,
     reason: String,
 }
@@ -152,29 +152,35 @@ pub async fn validate_owners(
 
     // Sort results for display
     let mut valid: Vec<&str> = Vec::new();
-    let mut invalid: Vec<&str> = Vec::new();
+    let mut invalid: Vec<(&str, &str)> = Vec::new();
     let mut unknown: Vec<(&str, &str)> = Vec::new();
 
     for result in &results {
         match result {
             ValidationResult::Valid(owner) => valid.push(owner),
-            ValidationResult::Invalid(owner) => invalid.push(owner),
+            ValidationResult::Invalid(owner, reason) => invalid.push((owner, reason)),
             ValidationResult::Unknown(owner, reason) => unknown.push((owner, reason)),
         }
     }
 
     valid.sort();
-    invalid.sort();
+    invalid.sort_by_key(|(o, _)| *o);
     unknown.sort_by_key(|(o, _)| *o);
 
     // JSON output
     if json {
         let output = ValidateOwnersJson {
             valid: valid.iter().map(|s| s.to_string()).collect(),
-            invalid: invalid.iter().map(|s| s.to_string()).collect(),
+            invalid: invalid
+                .iter()
+                .map(|(owner, reason)| InvalidOwner {
+                    owner: owner.to_string(),
+                    reason: reason.to_string(),
+                })
+                .collect(),
             unknown: unknown
                 .iter()
-                .map(|(owner, reason)| UnknownOwner {
+                .map(|(owner, reason)| InvalidOwner {
                     owner: owner.to_string(),
                     reason: reason.to_string(),
                 })
@@ -195,8 +201,13 @@ pub async fn validate_owners(
     for owner in &valid {
         println!("  {} {}", "✓".green(), owner);
     }
-    for owner in &invalid {
-        println!("  {} {} {}", "✗".red(), owner, "(not found)".dimmed());
+    for (owner, reason) in &invalid {
+        println!(
+            "  {} {} {}",
+            "✗".red(),
+            owner,
+            format!("({})", reason).dimmed()
+        );
     }
     for (owner, reason) in &unknown {
         println!("  {} {} {}", "?".yellow(), owner, reason.dimmed());
@@ -219,7 +230,7 @@ async fn validate_single(client: &GitHubClient, owner: &str, token: &str) -> Val
 
     match result {
         Some(true) => ValidationResult::Valid(owner.to_string()),
-        Some(false) => ValidationResult::Invalid(owner.to_string()),
+        Some(false) => ValidationResult::Invalid(owner.to_string(), "not found on GitHub"),
         None => {
             let reason = if owner.contains('@') && !owner.starts_with('@') {
                 "(email, can't validate)"

@@ -126,11 +126,27 @@ pub async fn lint(
             println!("::{level} file={file_path},line={line},col={col},title={title}::{message}");
         }
     } else if json_output {
+        // Parse content to get pattern/owners for each line
+        let parsed_lines = parse_codeowners_file_with_positions(&content);
+        let line_data: std::collections::HashMap<u32, (&str, &[String])> = parsed_lines
+            .iter()
+            .filter_map(|l| {
+                if let CodeownersLine::Rule { pattern, owners } = &l.content {
+                    Some((l.line_number, (pattern.as_str(), owners.as_slice())))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         let json = serde_json::json!({
             "file": codeowners_path.display().to_string(),
             "diagnostics": diagnostics.iter().map(|d| {
-                serde_json::json!({
-                    "line": d.range.start.line + 1,
+                let line_num = d.range.start.line;
+                let (pattern, owners) = line_data.get(&line_num).copied().unwrap_or(("", &[]));
+
+                let mut obj = serde_json::json!({
+                    "line": line_num + 1,
                     "column": d.range.start.character + 1,
                     "severity": match d.severity {
                         Some(DiagnosticSeverity::ERROR) => "error",
@@ -141,7 +157,15 @@ pub async fn lint(
                     },
                     "code": d.code,
                     "message": d.message,
-                })
+                });
+
+                // Add pattern and owners if this diagnostic relates to a rule
+                if !pattern.is_empty() {
+                    obj["pattern"] = serde_json::json!(pattern);
+                    obj["owners"] = serde_json::json!(owners);
+                }
+
+                obj
             }).collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
