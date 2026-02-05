@@ -55,57 +55,24 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --all
 
-  # Check if version changed (only on main)
-  check-version:
-    name: Check Version
-    runs-on: "runs-on=${{ github.run_id }}/pool=tiny-arm64"
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [check, clippy, fmt, test]
-    outputs:
-      should_release: ${{ steps.check.outputs.should_release }}
-      version: ${{ steps.check.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check if version needs release
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "Current version: $CURRENT"
-
-          # Get latest release version from GitHub
-          RELEASED=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null | sed 's/^v//' || echo "0.0.0")
-          echo "Latest released version: $RELEASED"
-
-          if [ "$CURRENT" != "$RELEASED" ]; then
-            echo "New version to release!"
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "version=$CURRENT" >> $GITHUB_OUTPUT
-          else
-            echo "Version already released"
-            echo "should_release=false" >> $GITHUB_OUTPUT
-          fi
-
-  # Matrix build (only if version changed)
+  # Matrix build (on main after tests pass)
   build:
     name: Build ${{ matrix.target }}
-    needs: check-version
-    if: needs.check-version.outputs.should_release == 'true'
+    needs: [check, clippy, fmt, test]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            runner: "runs-on/runner=8cpu-linux-x64/run-id=${{ github.run_id }}"
+            runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
           - target: aarch64-unknown-linux-gnu
-            runner: "runs-on/runner=8cpu-linux-arm64/run-id=${{ github.run_id }}"
+            runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
           - target: x86_64-unknown-linux-musl
-            runner: "runs-on/runner=8cpu-linux-x64/run-id=${{ github.run_id }}"
+            runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
           - target: aarch64-unknown-linux-musl
-            runner: "runs-on/runner=8cpu-linux-arm64/run-id=${{ github.run_id }}"
+            runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
           - target: x86_64-apple-darwin
             runner: macos-14
           - target: aarch64-apple-darwin
@@ -117,7 +84,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Install musl-tools
-        if: contains(matrix.target, '-musl')
+        if: contains(matrix.target, 'musl')
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
@@ -139,35 +106,59 @@ jobs:
           name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
           path: ${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz
 
-  # Create release (only if builds succeeded)
+  # Create release (only if version changed)
   release:
     name: Release
-    needs: [check-version, build]
+    needs: [build]
     runs-on: "runs-on=${{ github.run_id }}/pool=tiny-arm64"
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check if version needs release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "Current version: $CURRENT"
+          echo "version=$CURRENT" >> $GITHUB_OUTPUT
+
+          # Get latest release version from GitHub
+          RELEASED=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null | sed 's/^v//' || echo "0.0.0")
+          echo "Latest released version: $RELEASED"
+
+          if [ "$CURRENT" != "$RELEASED" ]; then
+            echo "New version to release!"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            echo "Version already released"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
       - uses: actions/download-artifact@v4
+        if: steps.check.outputs.should_release == 'true'
         with:
           path: artifacts
 
       - name: Delete existing release and tag
+        if: steps.check.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION="v${{ needs.check-version.outputs.version }}"
+          VERSION="v${{ steps.check.outputs.version }}"
           # Delete release if exists
           gh release delete "$VERSION" --yes 2>/dev/null || true
           # Delete tag if exists
           git push origin ":refs/tags/$VERSION" 2>/dev/null || true
 
       - name: Create Release
+        if: steps.check.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ needs.check-version.outputs.version }}
-          name: v${{ needs.check-version.outputs.version }}
+          tag_name: v${{ steps.check.outputs.version }}
+          name: v${{ steps.check.outputs.version }}
           draft: false
           prerelease: false
           files: artifacts/**/*
