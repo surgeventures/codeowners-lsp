@@ -285,6 +285,7 @@ impl FileCache {
     }
 
     /// Get files with no owners according to the given rules
+    #[allow(dead_code)] // Used by CLI binary
     pub fn get_unowned_files(&self, rules: &[ParsedLine]) -> Vec<&String> {
         // Extract and compile patterns once
         let compiled: Vec<CompiledPattern> = rules

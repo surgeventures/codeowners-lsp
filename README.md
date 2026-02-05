@@ -169,7 +169,6 @@ pattern-no-match = "warning"     # default: warning
 duplicate-owner = "warning"      # default: warning
 shadowed-rule = "warning"        # default: warning
 no-owners = "off"                # default: hint
-unowned-files = "info"           # default: info
 github-owner-not-found = "warning"  # default: warning
 ```
 
@@ -213,7 +212,6 @@ JSON settings can also be passed via LSP init options (these override TOML confi
 | `shadowed-rule`          | warning | Rule is shadowed by a later rule (dead code, last match wins)        |
 | `no-owners`              | hint    | Rule has a pattern but no owners assigned                            |
 | `file-not-owned`         | error   | File has no matching CODEOWNERS rule (shown on non-CODEOWNERS files) |
-| `unowned-files`          | info    | Summary diagnostic showing count of files without owners             |
 | `github-owner-not-found` | warning | Owner not found on GitHub (requires `validate_owners = true`)        |
 
 Override severities in config with: `off`, `hint`, `info`, `warning`, `error`

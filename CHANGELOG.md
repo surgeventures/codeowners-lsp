@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.14.3] - 2026-02-05
+
+### Removed
+
+- **`unowned-files` diagnostic** - Coverage info is available via `coverage` command; removed redundant diagnostic that wasn't line-specific.
+
 ## [0.14.2] - 2026-02-05
 
 ### Added

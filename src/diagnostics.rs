@@ -16,7 +16,7 @@ pub mod codes {
     pub const DUPLICATE_OWNER: &str = "duplicate-owner";
     pub const SHADOWED_RULE: &str = "shadowed-rule";
     pub const NO_OWNERS: &str = "no-owners";
-    pub const UNOWNED_FILES: &str = "unowned-files";
+
     #[allow(dead_code)] // Used by LSP only
     pub const GITHUB_OWNER_NOT_FOUND: &str = "github-owner-not-found";
     #[allow(dead_code)] // Used by LSP only
@@ -343,48 +343,6 @@ pub fn compute_diagnostics_sync(
                         ..Default::default()
                     });
                 }
-            }
-        }
-    }
-
-    // Check for unowned files (coverage)
-    if let Some(cache) = file_cache {
-        if let Some(severity) = config.get(codes::UNOWNED_FILES, DiagnosticSeverity::INFORMATION) {
-            let unowned = cache.get_unowned_files(&lines);
-            if !unowned.is_empty() {
-                let last_line = content.lines().count().saturating_sub(1) as u32;
-                let sample_files: Vec<&str> = unowned.iter().take(5).map(|s| s.as_str()).collect();
-                let message = if unowned.len() > 5 {
-                    format!(
-                        "{} files have no code owners (e.g., {})",
-                        unowned.len(),
-                        sample_files.join(", ")
-                    )
-                } else {
-                    format!(
-                        "{} files have no code owners: {}",
-                        unowned.len(),
-                        sample_files.join(", ")
-                    )
-                };
-
-                diagnostics.push(Diagnostic {
-                    range: Range {
-                        start: Position {
-                            line: last_line,
-                            character: 0,
-                        },
-                        end: Position {
-                            line: last_line,
-                            character: 0,
-                        },
-                    },
-                    severity: Some(severity),
-                    code: Some(NumberOrString::String(codes::UNOWNED_FILES.to_string())),
-                    source: Some("codeowners".to_string()),
-                    message,
-                    ..Default::default()
-                });
             }
         }
     }
@@ -820,7 +778,6 @@ src/apps/foo/priv/gettext/ @team2
         assert_eq!(codes::DUPLICATE_OWNER, "duplicate-owner");
         assert_eq!(codes::SHADOWED_RULE, "shadowed-rule");
         assert_eq!(codes::NO_OWNERS, "no-owners");
-        assert_eq!(codes::UNOWNED_FILES, "unowned-files");
         assert_eq!(codes::GITHUB_OWNER_NOT_FOUND, "github-owner-not-found");
         assert_eq!(codes::FILE_NOT_OWNED, "file-not-owned");
     }
