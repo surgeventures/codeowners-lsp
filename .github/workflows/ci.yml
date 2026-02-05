@@ -16,51 +16,25 @@ env:
   BINARY_NAME: codeowners-lsp
 
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
+  checks:
+    name: Checks
+    runs-on: "runs-on=${{ github.run_id }}/pool=2cpu-linux-x64"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets -- -D warnings
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
       - run: cargo fmt --all -- --check
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
 
   # Check if version changed (only on main)
   check-version:
     name: Check Version
-    runs-on: ubuntu-latest
+    runs-on: "runs-on=${{ github.run_id }}/pool=tiny-arm64"
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [check, clippy, fmt, test]
+    needs: [checks]
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}
@@ -90,94 +64,66 @@ jobs:
 
   # Matrix build (only if version changed)
   build:
-    name: Build ${{ matrix.target }}
+    name: Build ${{ matrix.name }}
     needs: check-version
     if: needs.check-version.outputs.should_release == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: tar.gz
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: tar.gz
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            archive: tar.gz
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            archive: tar.gz
-            use_cross: true
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            archive: tar.gz
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            archive: tar.gz
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            archive: zip
+          - name: linux-x64-gnu
+            runner: "runs-on=${{ github.run_id }}/pool=2cpu-linux-x64"
+            target: x86_64-unknown-linux-gnu
+          - name: linux-arm64-gnu
+            runner: "runs-on=${{ github.run_id }}/pool=2cpu-linux-arm64"
+            target: aarch64-unknown-linux-gnu
+          - name: linux-x64-musl
+            runner: "runs-on=${{ github.run_id }}/pool=2cpu-linux-x64"
+            target: x86_64-unknown-linux-musl
+          - name: linux-arm64-musl
+            runner: "runs-on=${{ github.run_id }}/pool=2cpu-linux-arm64"
+            target: aarch64-unknown-linux-musl
+          - name: darwin-x64
+            runner: macos-14
+            target: x86_64-apple-darwin
+          - name: darwin-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.use_cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Install cross-compilation tools (aarch64-gnu)
-        if: matrix.target == 'aarch64-unknown-linux-gnu' && !matrix.use_cross
+      - name: Install musl-tools
+        if: contains(matrix.name, '-musl')
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Install cross-compilation tools (x86_64-musl)
-        if: matrix.target == 'x86_64-unknown-linux-musl' && !matrix.use_cross
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
+          sudo apt-get install -y --no-install-recommends musl-tools
 
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      - name: Build (cross)
-        if: matrix.use_cross
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Build (cargo)
-        if: ${{ !matrix.use_cross }}
+      - name: Build
         run: cargo build --release --target ${{ matrix.target }}
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Package
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }} codeowners-cli
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          cd target/${{ matrix.target }}/release
-          7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.zip ${{ env.BINARY_NAME }}.exe codeowners-cli.exe
+          tar -czvf ../../../${{ env.BINARY_NAME }}-${{ matrix.name }}.tar.gz ${{ env.BINARY_NAME }} codeowners-cli
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
-          path: ${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }}
+          name: ${{ env.BINARY_NAME }}-${{ matrix.name }}
+          path: ${{ env.BINARY_NAME }}-${{ matrix.name }}.tar.gz
 
   # Create release (only if builds succeeded)
   release:
     name: Release
     needs: [check-version, build]
-    runs-on: ubuntu-latest
+    runs-on: "runs-on=${{ github.run_id }}/pool=tiny-arm64"
     permissions:
       contents: write
     steps:

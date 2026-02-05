@@ -98,8 +98,8 @@ jobs:
 
       - name: Install codeowners-cli
         run: |
-          gh release download --repo radiosilence/codeowners-lsp \
-            --pattern '*x86_64-unknown-linux-musl*' --output - | tar xz -C /usr/local/bin
+          gh release download --repo surgeventures/codeowners-lsp \
+            --pattern '*linux-x64-musl*' --output - | tar xz -C /usr/local/bin
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -201,12 +201,12 @@ All heavy operations (file scanning, pattern matching, GitHub API calls) run in 
 ### mise (recommended)
 
 ```zsh
-mise use -g github:radiosilence/codeowners-lsp@latest
+mise use -g github:surgeventures/codeowners-lsp@latest
 ```
 
 ### Manual
 
-Download the latest release from [Releases](https://github.com/radiosilence/codeowners-lsp/releases).
+Download the latest release from [Releases](https://github.com/surgeventures/codeowners-lsp/releases).
 
 ```zsh
 codeowners-lsp  # Communicates over stdio
