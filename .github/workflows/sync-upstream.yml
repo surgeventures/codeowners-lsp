@@ -1,0 +1,65 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 6am UTC
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: Sync with upstream
+    runs-on: "runs-on=${{ github.run_id }}/pool=tiny-arm64"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/radiosilence/codeowners-lsp.git || true
+
+      - name: Fetch upstream
+        run: git fetch upstream main
+
+      - name: Check for changes
+        id: check
+        run: |
+          if git diff --quiet HEAD upstream/main; then
+            echo "No changes from upstream"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "Upstream has changes"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Attempt merge
+        if: steps.check.outputs.has_changes == 'true'
+        id: merge
+        run: |
+          if git merge upstream/main --no-edit; then
+            echo "Merge successful"
+            echo "merge_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "Merge has conflicts - aborting"
+            git merge --abort
+            echo "merge_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push if clean merge
+        if: steps.merge.outputs.merge_ok == 'true'
+        run: git push origin main
+
+      - name: Create issue on conflict
+        if: steps.merge.outputs.merge_ok == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Upstream sync conflict" \
+            --body "Automated sync from [radiosilence/codeowners-lsp](https://github.com/radiosilence/codeowners-lsp) failed due to merge conflicts. Please resolve manually." \
+            --label "upstream-sync"
