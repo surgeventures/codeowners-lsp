@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.15.2] - 2026-02-05
+
+### Fixed
+
+- **Completions show stale files** - File cache now refreshes on each completion request, so renamed/added/deleted files appear correctly.
+
 ## [0.15.1] - 2026-02-05
 
 ### Changed

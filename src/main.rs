@@ -1843,6 +1843,9 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
+        // Refresh file cache to pick up new/renamed/deleted files
+        self.refresh_file_cache().await;
+
         let position = params.text_document_position.position;
 
         // Use buffer content if available (for unsaved changes), else read from disk
