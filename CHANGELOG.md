@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.13.1] - 2026-02-05
+
+### Added
+
+- **`check --files`** - Named argument for consistency with `coverage` and `validate-owners`:
+  ```bash
+  codeowners-cli check --files src/main.rs src/lib.rs
+  ```
+
+### Changed
+
+- **`check` now uses shared file collection** - All three commands (`check`, `coverage`, `validate-owners`) now share the same `collect_files` implementation
+
 ## [0.13.0] - 2026-02-05
 
 ### Added

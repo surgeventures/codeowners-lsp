@@ -57,9 +57,12 @@ enum Commands {
     },
     /// Show which rule owns a specific file (or multiple files)
     Check {
-        /// File path(s) to check ownership of
+        /// File path(s) to check ownership of (positional)
         #[arg(num_args = 0..)]
-        files: Vec<String>,
+        paths: Vec<String>,
+        /// File path(s) to check (named, like coverage)
+        #[arg(long, num_args = 1..)]
+        files: Option<Vec<String>>,
         /// Output as JSON
         #[arg(long)]
         json: bool,
@@ -156,11 +159,12 @@ async fn main() -> ExitCode {
         } => commands::lint(path, json, fix, strict, github_actions).await,
         Commands::Fmt { path, write } => commands::fmt(path, write),
         Commands::Check {
+            paths,
             files,
             json,
             files_from,
             stdin,
-        } => commands::check(files, json, files_from, stdin),
+        } => commands::check(paths, files, json, files_from, stdin),
         Commands::Coverage {
             files,
             files_from,

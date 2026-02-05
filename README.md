@@ -15,8 +15,9 @@ codeowners-cli lint --github-actions  # Output GitHub Actions annotations for PR
 # Check who owns a file
 codeowners-cli check src/main.rs
 
-# Check multiple files
+# Check multiple files (positional or --files, consistent with coverage)
 codeowners-cli check src/main.rs src/lib.rs
+codeowners-cli check --files src/main.rs src/lib.rs
 
 # JSON output (for CI/scripting)
 codeowners-cli check --json src/main.rs

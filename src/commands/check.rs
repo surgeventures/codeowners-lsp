@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::{env, fs};
@@ -7,6 +6,7 @@ use std::{env, fs};
 use colored::Colorize;
 use serde::Serialize;
 
+use super::files::collect_files;
 use crate::ownership::{check_file_ownership, find_codeowners};
 
 #[derive(Serialize)]
@@ -16,33 +16,13 @@ struct CheckResultJson {
     owners: Vec<String>,
 }
 
-fn collect_files(
-    files: Vec<String>,
+pub fn check(
+    paths: Vec<String>,
+    files: Option<Vec<String>>,
+    json: bool,
     files_from: Option<PathBuf>,
     stdin: bool,
-) -> Result<Vec<String>, String> {
-    let mut all_files = files;
-
-    if let Some(path) = files_from {
-        let content = fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read {}: {}", path.display(), e))?;
-        all_files.extend(content.lines().filter(|l| !l.is_empty()).map(String::from));
-    }
-
-    if stdin {
-        let stdin = io::stdin();
-        for line in stdin.lock().lines() {
-            let line = line.map_err(|e| format!("Failed to read stdin: {}", e))?;
-            if !line.is_empty() {
-                all_files.push(line);
-            }
-        }
-    }
-
-    Ok(all_files)
-}
-
-pub fn check(files: Vec<String>, json: bool, files_from: Option<PathBuf>, stdin: bool) -> ExitCode {
+) -> ExitCode {
     let cwd = env::current_dir().expect("Failed to get current directory");
 
     let codeowners_path = match find_codeowners(&cwd) {
@@ -61,18 +41,28 @@ pub fn check(files: Vec<String>, json: bool, files_from: Option<PathBuf>, stdin:
         }
     };
 
-    let all_files = match collect_files(files, files_from, stdin) {
-        Ok(f) => f,
+    // Merge positional paths with --files for consistent interface
+    let files_arg = if paths.is_empty() {
+        files
+    } else {
+        let mut merged = paths;
+        if let Some(f) = files {
+            merged.extend(f);
+        }
+        Some(merged)
+    };
+
+    let all_files: Vec<String> = match collect_files(files_arg, files_from, stdin) {
+        Ok(Some(set)) => set.into_iter().collect(),
+        Ok(None) => {
+            eprintln!("No files specified");
+            return ExitCode::from(1);
+        }
         Err(e) => {
             eprintln!("{}", e);
             return ExitCode::from(1);
         }
     };
-
-    if all_files.is_empty() {
-        eprintln!("No files specified");
-        return ExitCode::from(1);
-    }
 
     if json {
         output_json(&content, &all_files)
