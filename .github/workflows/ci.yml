@@ -99,13 +99,13 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+            runner: "runs-on/runner=8cpu-linux-x64/run-id=${{ github.run_id }}"
           - target: aarch64-unknown-linux-gnu
-            runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
+            runner: "runs-on/runner=8cpu-linux-arm64/run-id=${{ github.run_id }}"
           - target: x86_64-unknown-linux-musl
-            runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+            runner: "runs-on/runner=8cpu-linux-x64/run-id=${{ github.run_id }}"
           - target: aarch64-unknown-linux-musl
-            runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
+            runner: "runs-on/runner=8cpu-linux-arm64/run-id=${{ github.run_id }}"
           - target: x86_64-apple-darwin
             runner: macos-14
           - target: aarch64-apple-darwin
