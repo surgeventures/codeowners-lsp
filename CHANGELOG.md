@@ -17,15 +17,15 @@
   - Owner validation for all files (warns only)
   - Lint checks with inline annotations
 
-  **Output formats:**
-  - JSON results to stdout
+  **Output:**
+  - Human-readable terminal summary
   - `GITHUB_OUTPUT` variables for downstream steps
   - `GITHUB_STEP_SUMMARY` markdown report
   - `::error::` / `::warning::` annotations on PR files
 
   **Check flags:** `--no-coverage-changed`, `--no-coverage-all`, `--no-owners-changed`, `--no-owners-all`, `--no-lint`
 
-  **Output flags:** `--no-json`, `--no-annotations`, `--no-summary`, `--no-outputs`
+  **Output flags:** `--no-annotations`, `--no-summary`, `--no-outputs`
 
 ## [0.14.3] - 2026-02-05
 

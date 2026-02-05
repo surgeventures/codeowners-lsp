@@ -128,9 +128,9 @@ jobs:
 
 ### Output
 
-The command produces four types of output:
+The command produces:
 
-1. **JSON to stdout** - Full results for parsing/logging
+1. **Human-readable summary** - Concise terminal output showing check results
 2. **Annotations** - `::error::` and `::warning::` messages appear inline on PR diffs
 3. **Step Summary** - Markdown report in the Actions UI with tables and status
 4. **Output Variables** - For use in subsequent workflow steps:
@@ -150,7 +150,6 @@ The command produces four types of output:
 
 **Control output:**
 
-- `--no-json` - Suppress JSON output
 - `--no-annotations` - Suppress `::error::`/`::warning::` messages
 - `--no-summary` - Don't write step summary
 - `--no-outputs` - Don't write output variables

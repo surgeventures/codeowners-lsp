@@ -31,7 +31,6 @@ pub struct GhaOptions {
     pub check_owners_all: bool,
     pub check_lint: bool,
     // Output options
-    pub output_json: bool,
     pub output_annotations: bool,
     pub output_summary: bool,
     pub output_vars: bool,
@@ -413,13 +412,8 @@ pub async fn gha(opts: GhaOptions) -> ExitCode {
 }
 
 fn output_results(results: &GhaResults, opts: &GhaOptions, failed: bool) {
-    // Output JSON to stdout
-    if opts.output_json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(results).expect("Failed to serialize results")
-        );
-    }
+    // Human-readable terminal output
+    print_human_summary(results);
 
     // Write GitHub Actions outputs
     if opts.output_vars {
@@ -482,12 +476,141 @@ fn output_results(results: &GhaResults, opts: &GhaOptions, failed: bool) {
         if let Ok(summary_file) = env::var("GITHUB_STEP_SUMMARY") {
             let summary = build_step_summary(results, failed);
             let _ = fs::write(&summary_file, summary);
-        } else {
-            // Print summary to stderr for local testing
-            eprintln!("\n{}", "─".repeat(60).dimmed());
-            eprintln!("{}", build_step_summary(results, failed));
         }
     }
+}
+
+fn print_human_summary(results: &GhaResults) {
+    println!();
+    println!("{}", "CODEOWNERS Check".bold());
+    println!();
+
+    // Coverage (changed files)
+    if let Some(ref cov) = results.coverage_changed {
+        if cov.unowned > 0 {
+            println!(
+                "  {} Coverage (changed): {}/{} files owned",
+                "✗".red(),
+                cov.owned.to_string().red(),
+                cov.total
+            );
+            for file in cov.unowned_files.iter().take(5) {
+                println!("      {} {}", "•".red(), file);
+            }
+            if cov.unowned_files.len() > 5 {
+                println!(
+                    "      {} ...and {} more",
+                    "•".dimmed(),
+                    cov.unowned_files.len() - 5
+                );
+            }
+        } else {
+            println!(
+                "  {} Coverage (changed): {}/{} files owned",
+                "✓".green(),
+                cov.owned.to_string().green(),
+                cov.total
+            );
+        }
+    }
+
+    // Coverage (all files)
+    if let Some(ref cov) = results.coverage_all {
+        if cov.unowned > 0 {
+            println!(
+                "  {} Coverage (all): {}/{} files owned ({} unowned)",
+                "⚠".yellow(),
+                cov.owned,
+                cov.total,
+                cov.unowned.to_string().yellow()
+            );
+        } else {
+            println!(
+                "  {} Coverage (all): {}/{} files owned",
+                "✓".green(),
+                cov.owned.to_string().green(),
+                cov.total
+            );
+        }
+    }
+
+    // Owners (changed files)
+    if let Some(ref owners) = results.owners_changed {
+        let invalid_count = owners.invalid.len() + owners.unknown.len();
+        if invalid_count > 0 {
+            println!(
+                "  {} Owners (changed): {} invalid",
+                "✗".red(),
+                invalid_count.to_string().red()
+            );
+            for inv in owners.invalid.iter().chain(owners.unknown.iter()).take(5) {
+                println!(
+                    "      {} {} ({})",
+                    "•".red(),
+                    inv.owner,
+                    inv.reason.dimmed()
+                );
+            }
+        } else {
+            println!(
+                "  {} Owners (changed): {} valid",
+                "✓".green(),
+                owners.valid.len().to_string().green()
+            );
+        }
+    }
+
+    // Owners (all)
+    if let Some(ref owners) = results.owners_all {
+        let invalid_count = owners.invalid.len() + owners.unknown.len();
+        if invalid_count > 0 {
+            println!(
+                "  {} Owners (all): {} invalid",
+                "⚠".yellow(),
+                invalid_count.to_string().yellow()
+            );
+        } else {
+            println!(
+                "  {} Owners (all): {} valid",
+                "✓".green(),
+                owners.valid.len().to_string().green()
+            );
+        }
+    }
+
+    // Lint
+    if let Some(ref lint) = results.lint {
+        if lint.diagnostics.is_empty() {
+            println!("  {} Lint: no issues", "✓".green());
+        } else {
+            let errors = lint
+                .diagnostics
+                .iter()
+                .filter(|d| d.severity == "error")
+                .count();
+            let warnings = lint
+                .diagnostics
+                .iter()
+                .filter(|d| d.severity == "warning")
+                .count();
+            if errors > 0 {
+                println!(
+                    "  {} Lint: {} errors, {} warnings",
+                    "✗".red(),
+                    errors.to_string().red(),
+                    warnings
+                );
+            } else {
+                println!(
+                    "  {} Lint: {} warnings",
+                    "⚠".yellow(),
+                    warnings.to_string().yellow()
+                );
+            }
+        }
+    }
+
+    println!();
 }
 
 fn build_step_summary(results: &GhaResults, failed: bool) -> String {
