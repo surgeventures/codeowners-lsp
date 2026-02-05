@@ -176,6 +176,9 @@ enum Commands {
         /// Skip lint check
         #[arg(long)]
         no_lint: bool,
+        /// Fail on warnings too (like lint --strict)
+        #[arg(long)]
+        strict: bool,
         /// Disable ::error::/::warning:: annotations
         #[arg(long)]
         no_annotations: bool,
@@ -276,6 +279,7 @@ async fn main() -> ExitCode {
             no_owners_changed,
             no_owners_all,
             no_lint,
+            strict,
             no_annotations,
             no_summary,
             no_outputs,
@@ -299,6 +303,7 @@ async fn main() -> ExitCode {
                 check_owners_changed: !no_owners_changed,
                 check_owners_all: !no_owners_all,
                 check_lint: !no_lint,
+                strict,
                 output_annotations: !no_annotations,
                 output_summary: !no_summary,
                 output_vars: !no_outputs,

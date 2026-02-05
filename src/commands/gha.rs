@@ -30,6 +30,7 @@ pub struct GhaOptions {
     pub check_owners_changed: bool,
     pub check_owners_all: bool,
     pub check_lint: bool,
+    pub strict: bool, // Fail on warnings too (like lint --strict)
     // Output options
     pub output_annotations: bool,
     pub output_summary: bool,
@@ -353,6 +354,18 @@ pub async fn gha(opts: GhaOptions) -> ExitCode {
                     "::{level} file={file_path},line={line},col={col},title={title}::{message}"
                 );
             }
+        }
+
+        // Check if lint should cause failure (errors always, warnings if strict)
+        let has_errors = diagnostics
+            .iter()
+            .any(|d| matches!(d.severity, Some(DiagnosticSeverity::ERROR)));
+        let has_warnings = diagnostics
+            .iter()
+            .any(|d| matches!(d.severity, Some(DiagnosticSeverity::WARNING)));
+
+        if has_errors || (opts.strict && has_warnings) {
+            failed = true;
         }
 
         let lint_diagnostics: Vec<LintDiagnostic> = diagnostics
