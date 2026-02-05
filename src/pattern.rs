@@ -841,4 +841,200 @@ mod tests {
         assert!(pattern_subsumes("src/lib/", "src/"));
         assert!(!pattern_subsumes("src/", "src/lib/"));
     }
+
+    // ---------------------------------------------------------------------------
+    // COMPILED PATTERN TESTS
+    // ---------------------------------------------------------------------------
+    // Tests specifically for the CompiledPattern struct
+
+    #[test]
+    fn test_compiled_pattern_match_all() {
+        let p = CompiledPattern::new("*");
+        assert!(p.matches("anything.txt"));
+        assert!(p.matches("a/b/c.txt"));
+
+        let p2 = CompiledPattern::new("**");
+        assert!(p2.matches("anything.txt"));
+        assert!(p2.matches("a/b/c.txt"));
+    }
+
+    #[test]
+    fn test_compiled_pattern_root_files_only() {
+        let p = CompiledPattern::new("/*");
+        assert!(p.matches("readme.md"));
+        assert!(p.matches("Makefile"));
+        assert!(!p.matches("src/main.rs"));
+        assert!(!p.matches("a/b/c.txt"));
+    }
+
+    #[test]
+    fn test_compiled_pattern_single_segment_glob() {
+        let p = CompiledPattern::new("*.rs");
+        assert!(p.matches("main.rs"));
+        assert!(p.matches("src/main.rs"));
+        assert!(p.matches("a/b/c/mod.rs"));
+        assert!(!p.matches("main.go"));
+    }
+
+    #[test]
+    fn test_compiled_pattern_multi_segment_glob() {
+        let p = CompiledPattern::new("src/**/*.rs");
+        assert!(p.matches("src/main.rs"));
+        assert!(p.matches("src/lib/mod.rs"));
+        assert!(!p.matches("lib/main.rs"));
+
+        let p2 = CompiledPattern::new("/docs/*.md");
+        assert!(p2.matches("docs/readme.md"));
+        assert!(!p2.matches("docs/api/readme.md"));
+    }
+
+    #[test]
+    fn test_compiled_pattern_anchored_directory() {
+        let p = CompiledPattern::new("/src/");
+        assert!(p.matches("src/main.rs"));
+        assert!(p.matches("src/lib/mod.rs"));
+        assert!(!p.matches("other/src/file.rs"));
+    }
+
+    #[test]
+    fn test_compiled_pattern_unanchored_directory() {
+        let p = CompiledPattern::new("docs/");
+        assert!(p.matches("docs/readme.md"));
+        assert!(p.matches("src/docs/file.txt"));
+        assert!(p.matches("a/b/docs/deep.txt"));
+        assert!(!p.matches("documentation/readme.md"));
+    }
+
+    #[test]
+    fn test_compiled_pattern_exact() {
+        let p = CompiledPattern::new("/Makefile");
+        assert!(p.matches("Makefile"));
+        assert!(!p.matches("build/Makefile"));
+
+        let p2 = CompiledPattern::new("/src");
+        assert!(p2.matches("src"));
+        assert!(p2.matches("src/main.rs"));
+        assert!(!p2.matches("other/src/file.rs"));
+    }
+
+    #[test]
+    fn test_compiled_pattern_empty_path() {
+        // Empty path should never match anything
+        let p = CompiledPattern::new("*");
+        assert!(!p.matches(""));
+
+        let p2 = CompiledPattern::new("/src/");
+        assert!(!p2.matches(""));
+    }
+
+    #[test]
+    fn test_compiled_pattern_unanchored_dir_exact_match() {
+        // Unanchored dir pattern matching exact dir name
+        let p = CompiledPattern::new("docs/");
+        // Test where path exactly equals the dir (edge case)
+        assert!(p.matches("docs/file.txt"));
+    }
+
+    #[test]
+    fn test_compiled_pattern_unanchored_dir_slash_search() {
+        // Test the /dir/ search path in UnanchoredDirectory
+        let p = CompiledPattern::new("lib/");
+        assert!(p.matches("src/lib/file.rs"));
+        assert!(p.matches("a/b/lib/c/d.rs"));
+        assert!(!p.matches("library/file.rs"));
+    }
+
+    // ---------------------------------------------------------------------------
+    // ADDITIONAL EDGE CASES
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn test_subsumes_exact_paths_with_slash() {
+        // Exact paths containing / are implicitly anchored
+        // So /src/main.rs and src/main.rs are equivalent
+        assert!(pattern_subsumes("src/main.rs", "/src/main.rs"));
+        assert!(pattern_subsumes("/src/main.rs", "src/main.rs"));
+    }
+
+    #[test]
+    fn test_subsumes_unanchored_file_not_by_anchored_dir() {
+        // An unanchored file path shouldn't be subsumed by an anchored directory
+        // because the unanchored file might be somewhere else
+        // (This tests the !a_anchored && b_anchored case in subsumes)
+        // Note: "lib/foo.rs" contains / so is implicitly anchored
+        // For truly unanchored file, use single segment
+        assert!(!pattern_subsumes("foo.rs", "/src/")); // foo.rs is single segment, implicitly anchored
+    }
+
+    #[test]
+    fn test_compiled_anchored_star_vs_unanchored() {
+        // //* (anchored *) should be RootFilesOnly
+        // /* matches only root level files
+        let p = CompiledPattern::new("/*");
+        assert!(matches!(p, CompiledPattern::RootFilesOnly));
+
+        // Unanchored * is MatchAll
+        let p2 = CompiledPattern::new("*");
+        assert!(matches!(p2, CompiledPattern::MatchAll));
+    }
+
+    #[test]
+    fn test_anchored_dir_exact_length_match() {
+        // Test the exact length boundary in AnchoredDirectory
+        let p = CompiledPattern::new("/src/");
+
+        // Path exactly equal to dir (edge case) - matches because it's the dir itself
+        assert!(p.matches("src")); // Directory pattern matches the directory itself
+
+        // With content after
+        assert!(p.matches("src/file.rs"));
+
+        // But not partial prefix
+        assert!(!p.matches("srcfile.rs")); // "srcfile" != "src/"
+    }
+
+    #[test]
+    fn test_compiled_unanchored_dir_nested_match() {
+        // Test the loop in UnanchoredDirectory that checks /dir at various positions (lines 86-89)
+        let p = CompiledPattern::new("lib/");
+
+        // Should match lib at various depths
+        assert!(p.matches("lib/file.rs")); // root
+        assert!(p.matches("src/lib/file.rs")); // one level deep
+        assert!(p.matches("a/b/lib/c.rs")); // two levels deep
+        assert!(p.matches("x/y/z/lib/deep.txt")); // three levels deep
+
+        // Should not match partial names
+        assert!(!p.matches("libfoo/file.rs"));
+        assert!(!p.matches("src/libfoo/file.rs"));
+    }
+
+    #[test]
+    fn test_pattern_matches_unanchored_dir_loop() {
+        // Test the loop in pattern_matches for unanchored directories (lines 177-182)
+        // This covers the second check branch in the loop
+        assert!(pattern_matches("docs/", "project/docs/readme.md"));
+        assert!(pattern_matches("docs/", "a/b/docs/file.txt"));
+        assert!(pattern_matches("docs/", "x/docs/y/z.md"));
+    }
+
+    #[test]
+    fn test_subsumes_extension_not_by_non_extension() {
+        // Test line 234 - *.rs not subsumed by a non-* pattern
+        assert!(!pattern_subsumes("*.rs", "src/"));
+        assert!(!pattern_subsumes("*.rs", "/src/main.rs"));
+        assert!(!pattern_subsumes("*.js", "docs/"));
+    }
+
+    #[test]
+    fn test_compiled_exact_as_directory_prefix() {
+        // Test Exact pattern matching as directory prefix
+        let p = CompiledPattern::new("/build");
+
+        assert!(p.matches("build")); // exact
+        assert!(p.matches("build/output")); // as prefix
+        assert!(p.matches("build/a/b/c")); // deep prefix
+        assert!(!p.matches("builder")); // not prefix with /
+        assert!(!p.matches("src/build")); // nested - anchored
+    }
 }

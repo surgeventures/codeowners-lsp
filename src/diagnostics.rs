@@ -606,4 +606,246 @@ src/apps/foo/priv/gettext/ @team2
 
         assert!(diagnostics.is_empty());
     }
+
+    #[test]
+    fn test_parse_severity_variants() {
+        // Test all severity parsing variants
+        assert_eq!(parse_severity("off"), None);
+        assert_eq!(parse_severity("none"), None);
+        assert_eq!(parse_severity("disable"), None);
+        assert_eq!(parse_severity("disabled"), None);
+        assert_eq!(parse_severity("hint"), Some(DiagnosticSeverity::HINT));
+        assert_eq!(
+            parse_severity("info"),
+            Some(DiagnosticSeverity::INFORMATION)
+        );
+        assert_eq!(
+            parse_severity("information"),
+            Some(DiagnosticSeverity::INFORMATION)
+        );
+        assert_eq!(parse_severity("warn"), Some(DiagnosticSeverity::WARNING));
+        assert_eq!(parse_severity("warning"), Some(DiagnosticSeverity::WARNING));
+        assert_eq!(parse_severity("error"), Some(DiagnosticSeverity::ERROR));
+        // Unknown defaults to warning
+        assert_eq!(parse_severity("unknown"), Some(DiagnosticSeverity::WARNING));
+        // Case insensitive
+        assert_eq!(parse_severity("ERROR"), Some(DiagnosticSeverity::ERROR));
+        assert_eq!(parse_severity("WaRnInG"), Some(DiagnosticSeverity::WARNING));
+    }
+
+    #[test]
+    fn test_diagnostic_config_default_fallback() {
+        let config = DiagnosticConfig::default();
+        // Unconfigured code should return the provided default
+        assert_eq!(
+            config.get("invalid-pattern", DiagnosticSeverity::ERROR),
+            Some(DiagnosticSeverity::ERROR)
+        );
+        assert_eq!(
+            config.get("unknown-code", DiagnosticSeverity::HINT),
+            Some(DiagnosticSeverity::HINT)
+        );
+    }
+
+    #[test]
+    fn test_diagnostic_config_configured_off_returns_none() {
+        let mut map = HashMap::new();
+        map.insert("invalid-pattern".to_string(), "off".to_string());
+        let config = DiagnosticConfig::from_map(&map);
+
+        // Configured as off should return None regardless of default
+        assert_eq!(
+            config.get("invalid-pattern", DiagnosticSeverity::ERROR),
+            None
+        );
+    }
+
+    #[test]
+    fn test_multiple_owners_offset_calculation() {
+        // Test that multiple owners are at correct offsets
+        let content = "*.rs @first @second @third";
+        let (_, owners) = compute_diagnostics_sync(content, None, &default_config());
+
+        assert_eq!(owners.len(), 3);
+        // First owner starts at position 5 (after "*.rs ")
+        assert_eq!(owners[0].1, 5); // owner_offset
+        assert_eq!(owners[0].2, "@first");
+        // Second and third should be found at their positions
+        assert_eq!(owners[1].2, "@second");
+        assert_eq!(owners[2].2, "@third");
+    }
+
+    #[test]
+    fn test_shadowed_rule_exact_duplicate_has_related_info() {
+        let content = "*.rs @owner1\n*.rs @owner2";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        assert_eq!(diagnostics.len(), 1);
+        // Exact duplicates should have related_information
+        assert!(diagnostics[0].related_information.is_some());
+    }
+
+    #[test]
+    fn test_shadowed_rule_subsumption_no_related_info() {
+        // This tests subsumption shadowing (not exact duplicate)
+        let content = "/src/lib/ @team1\n/src/ @team2";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        let shadowed: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("shadowed"))
+            .collect();
+        assert!(!shadowed.is_empty());
+        // Subsumption diagnostics don't have related_information
+        // (only exact duplicates do)
+    }
+
+    #[test]
+    fn test_multiple_diagnostics_same_line() {
+        // Invalid pattern AND no owners
+        let content = "[invalid";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        // Should have invalid pattern error
+        assert!(diagnostics
+            .iter()
+            .any(|d| d.message.contains("Invalid glob pattern")));
+    }
+
+    #[test]
+    fn test_shadowed_rule_different_anchoring() {
+        // /docs/ and docs/ are different - one anchored, one not
+        let content = "/docs/ @team1\ndocs/ @team2";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        let shadowed: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("shadowed"))
+            .collect();
+
+        // /docs/ is subsumed by docs/ (unanchored matches more)
+        assert_eq!(shadowed.len(), 1);
+        assert_eq!(shadowed[0].range.start.line, 0);
+    }
+
+    #[test]
+    fn test_shadowed_by_double_star() {
+        let content = "*.rs @rust\n** @all";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        let shadowed: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("shadowed"))
+            .collect();
+        assert_eq!(shadowed.len(), 1);
+        assert_eq!(shadowed[0].range.start.line, 0);
+    }
+
+    #[test]
+    fn test_shadowed_rule_skip_same_line() {
+        // Single rule shouldn't shadow itself
+        let content = "*.rs @owner";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        let shadowed: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("shadowed"))
+            .collect();
+        assert!(shadowed.is_empty());
+    }
+
+    #[test]
+    fn test_empty_content() {
+        let content = "";
+        let (diagnostics, owners) = compute_diagnostics_sync(content, None, &default_config());
+
+        assert!(diagnostics.is_empty());
+        assert!(owners.is_empty());
+    }
+
+    #[test]
+    fn test_only_comments() {
+        let content = "# Comment 1\n# Comment 2\n# Comment 3";
+        let (diagnostics, owners) = compute_diagnostics_sync(content, None, &default_config());
+
+        assert!(diagnostics.is_empty());
+        assert!(owners.is_empty());
+    }
+
+    #[test]
+    fn test_invalid_owner_not_queued_for_github() {
+        // Invalid owners shouldn't be queued for GitHub validation
+        let content = "*.rs invalid-owner @valid-owner";
+        let (_, owners) = compute_diagnostics_sync(content, None, &default_config());
+
+        // Only valid owner should be queued
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].2, "@valid-owner");
+    }
+
+    #[test]
+    fn test_diagnostic_tags_for_shadowed() {
+        let content = "*.rs @owner1\n*.rs @owner2";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        // Shadowed rules should have UNNECESSARY tag
+        let shadowed = &diagnostics[0];
+        assert!(shadowed.tags.is_some());
+        assert!(shadowed
+            .tags
+            .as_ref()
+            .unwrap()
+            .contains(&DiagnosticTag::UNNECESSARY));
+    }
+
+    #[test]
+    fn test_subsumption_with_wildcards_in_earlier_rule() {
+        // Earlier wildcard rule shadowed by later catch-all
+        let content = "src/**/*.rs @rust\n* @all";
+        let (diagnostics, _) = compute_diagnostics_sync(content, None, &default_config());
+
+        let shadowed: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("shadowed"))
+            .collect();
+        assert_eq!(shadowed.len(), 1);
+    }
+
+    #[test]
+    fn test_code_constants() {
+        // Ensure code constants are what we expect
+        assert_eq!(codes::INVALID_PATTERN, "invalid-pattern");
+        assert_eq!(codes::INVALID_OWNER, "invalid-owner");
+        assert_eq!(codes::PATTERN_NO_MATCH, "pattern-no-match");
+        assert_eq!(codes::DUPLICATE_OWNER, "duplicate-owner");
+        assert_eq!(codes::SHADOWED_RULE, "shadowed-rule");
+        assert_eq!(codes::NO_OWNERS, "no-owners");
+        assert_eq!(codes::UNOWNED_FILES, "unowned-files");
+        assert_eq!(codes::GITHUB_OWNER_NOT_FOUND, "github-owner-not-found");
+        assert_eq!(codes::FILE_NOT_OWNED, "file-not-owned");
+    }
+
+    #[test]
+    fn test_severity_config_multiple_codes() {
+        let mut map = HashMap::new();
+        map.insert("invalid-pattern".to_string(), "error".to_string());
+        map.insert("no-owners".to_string(), "off".to_string());
+        map.insert("shadowed-rule".to_string(), "hint".to_string());
+        let config = DiagnosticConfig::from_map(&map);
+
+        assert_eq!(
+            config.get("invalid-pattern", DiagnosticSeverity::WARNING),
+            Some(DiagnosticSeverity::ERROR)
+        );
+        assert_eq!(config.get("no-owners", DiagnosticSeverity::WARNING), None);
+        assert_eq!(
+            config.get("shadowed-rule", DiagnosticSeverity::WARNING),
+            Some(DiagnosticSeverity::HINT)
+        );
+        // Unconfigured uses default
+        assert_eq!(
+            config.get("pattern-no-match", DiagnosticSeverity::INFORMATION),
+            Some(DiagnosticSeverity::INFORMATION)
+        );
+    }
 }

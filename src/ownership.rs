@@ -196,4 +196,38 @@ mod tests {
         let path = PathBuf::from("/project/CODEOWNERS");
         assert_eq!(get_repo_root(&path, &fallback), PathBuf::from("/project"));
     }
+
+    #[test]
+    fn test_apply_safe_fixes_all_duplicate_owners_removed() {
+        // When all owners are duplicates, pattern should remain alone (line 98)
+        let content = "*.rs @owner @owner\n";
+        let result = apply_safe_fixes(content, None);
+        assert_eq!(result.content, "*.rs @owner\n");
+    }
+
+    #[test]
+    fn test_get_repo_root_docs_directory() {
+        // Test docs/ directory handling
+        let path = PathBuf::from("/project/docs/CODEOWNERS");
+        let fallback = PathBuf::from("/project");
+        assert_eq!(get_repo_root(&path, &fallback), PathBuf::from("/project"));
+    }
+
+    #[test]
+    fn test_get_repo_root_fallback() {
+        // Test fallback when parent is None (root path)
+        let path = PathBuf::from("/CODEOWNERS");
+        let fallback = PathBuf::from("/fallback");
+        // Parent of /CODEOWNERS is /, which is not .github or docs
+        assert_eq!(get_repo_root(&path, &fallback), PathBuf::from("/"));
+    }
+
+    #[test]
+    fn test_check_file_ownership_last_match_wins() {
+        // Verify last matching pattern wins
+        let content = "* @default\n*.rs @rust";
+        let result = check_file_ownership(content, "main.rs").unwrap();
+        assert_eq!(result.pattern, "*.rs");
+        assert_eq!(result.owners, vec!["@rust"]);
+    }
 }

@@ -368,4 +368,52 @@ mod tests {
         assert_eq!(contrib.commit_count, 42);
         assert_eq!(contrib.percentage, 100.0);
     }
+
+    #[test]
+    fn test_parse_shortlog_unclosed_bracket() {
+        // Email with only opening bracket
+        let output = "    5\tUser <email@test.com\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        // Should treat whole thing as name
+        assert_eq!(suggestion.contributors[0].name, "User <email@test.com");
+        assert_eq!(suggestion.contributors[0].email, "");
+    }
+
+    #[test]
+    fn test_parse_shortlog_invalid_count() {
+        // Non-numeric commit count
+        let output = "   abc\tUser <user@test.com>\n";
+        let result = parse_shortlog_output(output, "file.rs");
+        // parse().ok()? returns None, so entire function returns None
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_shortlog_mixed_valid_invalid() {
+        // First line valid, second has invalid count - should stop at invalid
+        let output = "    10\tAlice <alice@test.com>\n   bad\tBob <bob@test.com>\n";
+        let result = parse_shortlog_output(output, "file.rs");
+        // Returns None because of parse failure
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_owner_suggestion_default_suggested_owner() {
+        let output = "    10\tDev <dev@test.com>\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        // suggested_owner is empty by default, filled later by suggest command
+        assert_eq!(suggestion.suggested_owner, "");
+    }
+
+    #[test]
+    fn test_confidence_calculation_max_volume() {
+        // 100+ commits maxes out volume factor at 1.0
+        let output = "   150\tDev <dev@test.com>\n";
+        let suggestion = parse_shortlog_output(output, "file.rs").unwrap();
+
+        // 100% ownership (0.7) + max volume (0.3) = 100%
+        assert!(suggestion.confidence >= 99.0);
+    }
 }

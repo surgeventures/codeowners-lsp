@@ -378,4 +378,31 @@ mod tests {
         // Just verify it doesn't panic and returns a config
         let _config = settings.diagnostic_config();
     }
+
+    #[test]
+    fn test_settings_merge_github_token() {
+        let mut base = Settings {
+            github_token: Some("base-token".to_string()),
+            ..Default::default()
+        };
+        let other = Settings {
+            github_token: Some("other-token".to_string()),
+            ..Default::default()
+        };
+        base.merge(other);
+        // Other overwrites base
+        assert_eq!(base.github_token, Some("other-token".to_string()));
+    }
+
+    #[test]
+    fn test_settings_merge_github_token_none_preserves() {
+        let mut base = Settings {
+            github_token: Some("base-token".to_string()),
+            ..Default::default()
+        };
+        let other = Settings::default(); // github_token is None
+        base.merge(other);
+        // Base preserved when other is None
+        assert_eq!(base.github_token, Some("base-token".to_string()));
+    }
 }

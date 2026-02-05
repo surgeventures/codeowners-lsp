@@ -403,4 +403,380 @@ mod tests {
         let unowned = cache.get_unowned_files(&rules);
         assert!(unowned.is_empty());
     }
+
+    #[test]
+    fn test_fuzzy_match_basic() {
+        assert!(fuzzy_match("src/main.rs", "src"));
+        assert!(fuzzy_match("src/main.rs", "main"));
+        assert!(fuzzy_match("src/main.rs", "s/m"));
+        assert!(fuzzy_match("src/main.rs", "smr")); // s...m...r
+        assert!(!fuzzy_match("src/main.rs", "xyz"));
+        assert!(!fuzzy_match("src/main.rs", "zyx")); // none exist
+                                                     // Note: "rms" DOES match: s[r]c/[m]ain.r[s] - chars appear in order
+        assert!(fuzzy_match("src/main.rs", "rms"));
+    }
+
+    #[test]
+    fn test_fuzzy_match_empty() {
+        assert!(fuzzy_match("anything", ""));
+        assert!(fuzzy_match("", ""));
+        assert!(!fuzzy_match("", "a"));
+    }
+
+    #[test]
+    fn test_count_matches_caching() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // First call computes and caches
+        assert_eq!(cache.count_matches("*.rs"), 2);
+
+        // Verify it's cached
+        assert_eq!(cache.count_matches_cached("*.rs"), Some(2));
+
+        // Non-cached pattern returns None
+        assert_eq!(cache.count_matches_cached("*.md"), None);
+
+        // Now cache it
+        assert_eq!(cache.count_matches("*.md"), 1);
+        assert_eq!(cache.count_matches_cached("*.md"), Some(1));
+    }
+
+    #[test]
+    fn test_has_matches() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        assert!(cache.has_matches("*.rs"));
+        assert!(cache.has_matches("*.md"));
+        assert!(!cache.has_matches("*.xyz"));
+        assert!(cache.has_matches("src/**"));
+    }
+
+    #[test]
+    fn test_has_matches_uses_count_cache() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // Pre-populate count cache
+        cache.count_matches("*.rs");
+
+        // has_matches should use the count cache
+        assert!(cache.has_matches("*.rs"));
+    }
+
+    #[test]
+    fn test_find_patterns_with_matches() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let patterns = vec!["*.rs", "*.md", "*.xyz", "src/**"];
+        let result = cache.find_patterns_with_matches(&patterns);
+
+        assert!(result.contains(&0)); // *.rs
+        assert!(result.contains(&1)); // *.md
+        assert!(!result.contains(&2)); // *.xyz - no match
+        assert!(result.contains(&3)); // src/**
+    }
+
+    #[test]
+    fn test_find_patterns_with_matches_uses_cache() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // Pre-cache one pattern
+        cache.has_matches("*.rs");
+
+        let patterns = vec!["*.rs", "*.md"];
+        let result = cache.find_patterns_with_matches(&patterns);
+
+        assert!(result.contains(&0));
+        assert!(result.contains(&1));
+    }
+
+    #[test]
+    fn test_get_matches() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let matches = cache.get_matches("*.rs");
+
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().any(|f| f.ends_with("main.rs")));
+        assert!(matches.iter().any(|f| f.ends_with("lib.rs")));
+    }
+
+    #[test]
+    fn test_all_files() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let files = cache.all_files();
+
+        assert_eq!(files.len(), 4);
+    }
+
+    #[test]
+    fn test_complete_path_empty_query() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let completions = cache.complete_path("");
+
+        // Should return top-level items
+        assert!(completions.contains(&"src/".to_string()));
+        assert!(completions.contains(&"docs/".to_string()));
+        assert!(completions.contains(&"Cargo.toml".to_string()));
+    }
+
+    #[test]
+    fn test_complete_path_with_leading_slash() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let completions = cache.complete_path("/");
+
+        // Should preserve leading slash
+        assert!(completions.iter().all(|c| c.starts_with('/')));
+    }
+
+    #[test]
+    fn test_complete_path_prefix_match() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let completions = cache.complete_path("src");
+
+        // Should match files in src/
+        assert!(completions.iter().any(|c| c.contains("main.rs")));
+        assert!(completions.iter().any(|c| c.contains("lib.rs")));
+    }
+
+    #[test]
+    fn test_complete_path_substring_match() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let completions = cache.complete_path("main");
+
+        assert!(completions.iter().any(|c| c.contains("main.rs")));
+    }
+
+    #[test]
+    fn test_complete_path_fuzzy_match() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let completions = cache.complete_path("smr"); // s...m...r
+
+        // Should fuzzy match src/main.rs
+        assert!(completions.iter().any(|c| c.contains("main.rs")));
+    }
+
+    #[test]
+    fn test_complete_path_strips_dot_slash() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        let completions = cache.complete_path("./src");
+
+        assert!(completions.iter().any(|c| c.contains("main.rs")));
+    }
+
+    #[test]
+    fn test_unowned_with_comment_rules() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // Mix of comments and rules
+        let rules = vec![
+            ParsedLine {
+                line_number: 0,
+                content: CodeownersLine::Comment("# Section".to_string()),
+                pattern_start: 0,
+                pattern_end: 0,
+                owners_start: 0,
+            },
+            ParsedLine {
+                line_number: 1,
+                content: CodeownersLine::Rule {
+                    pattern: "*.rs".to_string(),
+                    owners: vec!["@rust-team".to_string()],
+                },
+                pattern_start: 0,
+                pattern_end: 4,
+                owners_start: 5,
+            },
+            ParsedLine {
+                line_number: 2,
+                content: CodeownersLine::Empty,
+                pattern_start: 0,
+                pattern_end: 0,
+                owners_start: 0,
+            },
+        ];
+
+        let unowned = cache.get_unowned_files(&rules);
+        // docs/readme.md and Cargo.toml are unowned
+        assert_eq!(unowned.len(), 2);
+    }
+
+    #[test]
+    fn test_empty_repo() {
+        let dir = tempdir().unwrap();
+
+        // Init git repo without any files
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        assert!(cache.files.is_empty());
+        assert_eq!(cache.count_matches("*"), 0);
+        assert!(!cache.has_matches("*.rs"));
+    }
+
+    #[test]
+    fn test_non_git_directory() {
+        let dir = tempdir().unwrap();
+        // No git init - just a regular directory
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+        assert!(cache.files.is_empty());
+    }
+
+    #[test]
+    fn test_count_matches_cache_hit() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // First call populates cache
+        let count1 = cache.count_matches("*.rs");
+        // Second call should hit cache (line 67)
+        let count2 = cache.count_matches("*.rs");
+
+        assert_eq!(count1, count2);
+        assert_eq!(count1, 2);
+    }
+
+    #[test]
+    fn test_has_matches_count_cache_zero() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // Pre-populate count cache with 0 for a pattern that doesn't match
+        cache.count_matches("*.xyz");
+
+        // has_matches should use count cache and return false (line 100)
+        assert!(!cache.has_matches("*.xyz"));
+    }
+
+    #[test]
+    fn test_find_patterns_all_cached() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // Pre-cache all patterns
+        cache.has_matches("*.rs");
+        cache.has_matches("*.md");
+
+        // Now call find_patterns_with_matches - should hit early return (lines 140-141)
+        let patterns = vec!["*.rs", "*.md"];
+        let result = cache.find_patterns_with_matches(&patterns);
+
+        assert!(result.contains(&0));
+        assert!(result.contains(&1));
+    }
+
+    #[test]
+    fn test_find_patterns_count_cache_zero_skip() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // Pre-populate count cache with 0 (no matches)
+        cache.count_matches("*.xyz");
+
+        // Pattern should be skipped, not added to result
+        let patterns = vec!["*.xyz", "*.rs"];
+        let result = cache.find_patterns_with_matches(&patterns);
+
+        assert!(!result.contains(&0)); // *.xyz has 0 matches
+        assert!(result.contains(&1)); // *.rs has matches
+    }
+
+    #[test]
+    fn test_complete_path_with_query_and_leading_slash() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // Query with leading slash and actual content (line 279)
+        let completions = cache.complete_path("/src");
+
+        // Results should have leading slash preserved
+        assert!(completions.iter().all(|c| c.starts_with('/')));
+        assert!(completions.iter().any(|c| c.contains("main.rs")));
+    }
+
+    #[test]
+    fn test_find_patterns_count_cache_positive_hit() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // Pre-populate count cache with positive count (line 141)
+        cache.count_matches("*.rs"); // This will cache count=2
+
+        // Now find_patterns_with_matches should use the count cache
+        let patterns = vec!["*.rs"];
+        let result = cache.find_patterns_with_matches(&patterns);
+
+        // Should use the count cache (count > 0) and add to result
+        assert!(result.contains(&0));
+    }
+
+    #[test]
+    fn test_has_matches_uses_has_match_cache() {
+        let dir = tempdir().unwrap();
+        create_test_repo(dir.path());
+
+        let cache = FileCache::new(&dir.path().to_path_buf());
+
+        // First call to has_matches populates has_match_cache
+        assert!(cache.has_matches("*.rs"));
+
+        // Second call should hit the has_match_cache (line 100)
+        assert!(cache.has_matches("*.rs"));
+    }
 }

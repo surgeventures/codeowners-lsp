@@ -334,4 +334,96 @@ mod tests {
             Some("@org/devops".to_string())
         );
     }
+
+    #[test]
+    fn test_run_lookup_with_echo() {
+        let lookup = OwnerLookup::new("echo 'platform'", vec!["@org/platform".to_string()]);
+
+        let result = lookup.run_lookup("test@example.com");
+        assert_eq!(result, Some("@org/platform".to_string()));
+    }
+
+    #[test]
+    fn test_run_lookup_empty_result() {
+        let lookup = OwnerLookup::new("echo ''", vec!["@org/team".to_string()]);
+
+        // Empty output should return None
+        let result = lookup.run_lookup("test@example.com");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_run_lookup_command_failure() {
+        let lookup = OwnerLookup::new("exit 1", vec!["@org/team".to_string()]);
+
+        // Failed command should return None
+        let result = lookup.run_lookup("test@example.com");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_run_lookup_no_fuzzy_match() {
+        let lookup = OwnerLookup::new("echo 'unknown-team'", vec!["@org/platform".to_string()]);
+
+        // Result doesn't match any existing owner
+        let result = lookup.run_lookup("test@example.com");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_run_lookup_with_email_substitution() {
+        // Verify {email} is substituted
+        let lookup = OwnerLookup::new(
+            "echo 'platform' # {email}",
+            vec!["@org/platform".to_string()],
+        );
+
+        let result = lookup.run_lookup("user@test.com");
+        assert_eq!(result, Some("@org/platform".to_string()));
+    }
+
+    #[test]
+    fn test_batch_lookup_single() {
+        let mut lookup = OwnerLookup::new("echo 'platform'", vec!["@org/platform".to_string()]);
+
+        let emails = vec!["test@example.com".to_string()];
+        let results = lookup.batch_lookup(&emails);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results.get("test@example.com"),
+            Some(&Some("@org/platform".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_batch_lookup_uses_cache() {
+        let mut lookup = OwnerLookup::new("echo 'platform'", vec!["@org/platform".to_string()]);
+
+        let emails = vec!["cached@example.com".to_string()];
+
+        // First call populates cache
+        lookup.batch_lookup(&emails);
+        assert!(lookup.cache.contains_key("cached@example.com"));
+
+        // Second call should use cache (we can verify by checking cache is still there)
+        let results = lookup.batch_lookup(&emails);
+        assert_eq!(
+            results.get("cached@example.com"),
+            Some(&Some("@org/platform".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_lookup_uses_cache() {
+        let mut lookup = OwnerLookup::new("echo 'platform'", vec!["@org/platform".to_string()]);
+
+        // First lookup
+        let result1 = lookup.lookup("cache-test@example.com");
+        assert!(lookup.cache.contains_key("cache-test@example.com"));
+
+        // Second lookup should return cached value
+        let result2 = lookup.lookup("cache-test@example.com");
+        assert_eq!(result1, result2);
+    }
 }

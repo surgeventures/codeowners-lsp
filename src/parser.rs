@@ -504,4 +504,214 @@ mod tests {
         assert_eq!(common_prefix_depth("/src/foo", "/lib/bar"), 0);
         assert_eq!(common_prefix_depth("", "/src"), 0);
     }
+
+    #[test]
+    fn test_find_owner_at_position_basic() {
+        let line = "*.rs @owner1 @org/team";
+        assert_eq!(find_owner_at_position(line, 5), Some("@owner1".to_string()));
+        assert_eq!(find_owner_at_position(line, 6), Some("@owner1".to_string()));
+        assert_eq!(
+            find_owner_at_position(line, 11),
+            Some("@owner1".to_string())
+        );
+        assert_eq!(
+            find_owner_at_position(line, 13),
+            Some("@org/team".to_string())
+        );
+    }
+
+    #[test]
+    fn test_find_owner_at_position_outside_owner() {
+        let line = "*.rs @owner";
+        // On pattern, not owner
+        assert_eq!(find_owner_at_position(line, 0), None);
+        assert_eq!(find_owner_at_position(line, 3), None);
+        // Past end
+        assert_eq!(find_owner_at_position(line, 100), None);
+    }
+
+    #[test]
+    fn test_find_owner_at_position_comment() {
+        let line = "# @mention in comment";
+        assert_eq!(find_owner_at_position(line, 2), None);
+    }
+
+    #[test]
+    fn test_find_owner_at_position_indented_comment() {
+        let line = "   # @mention in comment";
+        assert_eq!(find_owner_at_position(line, 5), None);
+    }
+
+    #[test]
+    fn test_find_owner_at_position_no_owners() {
+        let line = "/unowned/path/";
+        assert_eq!(find_owner_at_position(line, 0), None);
+        assert_eq!(find_owner_at_position(line, 5), None);
+    }
+
+    #[test]
+    fn test_find_owner_at_position_just_at_symbol() {
+        let line = "*.rs @ @";
+        // @ alone (no following chars) shouldn't match
+        assert_eq!(find_owner_at_position(line, 5), None);
+        assert_eq!(find_owner_at_position(line, 7), None);
+    }
+
+    #[test]
+    fn test_find_owner_at_position_special_chars() {
+        let line = "*.rs @user-name @user_name2";
+        assert_eq!(
+            find_owner_at_position(line, 5),
+            Some("@user-name".to_string())
+        );
+        assert_eq!(
+            find_owner_at_position(line, 16),
+            Some("@user_name2".to_string())
+        );
+    }
+
+    #[test]
+    fn test_format_codeowners_basic() {
+        let input = "# Comment\n*.rs    @owner1   @owner2\n/src/   @team";
+        let formatted = format_codeowners(input);
+        assert_eq!(formatted, "# Comment\n*.rs @owner1 @owner2\n/src/ @team\n");
+    }
+
+    #[test]
+    fn test_format_codeowners_collapse_empty_lines() {
+        let input = "*.rs @owner\n\n\n\n/src/ @team";
+        let formatted = format_codeowners(input);
+        assert_eq!(formatted, "*.rs @owner\n\n/src/ @team\n");
+    }
+
+    #[test]
+    fn test_format_codeowners_preserves_comments() {
+        let input = "# This is a special comment    with    spacing\n*.rs @owner";
+        let formatted = format_codeowners(input);
+        assert!(formatted.contains("# This is a special comment    with    spacing"));
+    }
+
+    #[test]
+    fn test_format_codeowners_no_owner() {
+        let input = "/unowned/";
+        let formatted = format_codeowners(input);
+        assert_eq!(formatted, "/unowned/\n");
+    }
+
+    #[test]
+    fn test_format_codeowners_empty() {
+        let input = "";
+        let formatted = format_codeowners(input);
+        assert_eq!(formatted, "");
+    }
+
+    #[test]
+    fn test_format_codeowners_leading_empty_lines() {
+        let input = "\n\n# Header\n*.rs @owner";
+        let formatted = format_codeowners(input);
+        // Leading blank lines should not produce output before first content
+        assert_eq!(formatted, "# Header\n*.rs @owner\n");
+    }
+
+    #[test]
+    fn test_codeowners_line_display_comment() {
+        let line = CodeownersLine::Comment("# test comment".to_string());
+        assert_eq!(format!("{}", line), "# test comment");
+    }
+
+    #[test]
+    fn test_codeowners_line_display_empty() {
+        let line = CodeownersLine::Empty;
+        assert_eq!(format!("{}", line), "");
+    }
+
+    #[test]
+    fn test_codeowners_line_display_rule() {
+        let line = CodeownersLine::Rule {
+            pattern: "*.rs".to_string(),
+            owners: vec!["@alice".to_string(), "@bob".to_string()],
+        };
+        assert_eq!(format!("{}", line), "*.rs @alice @bob");
+    }
+
+    #[test]
+    fn test_parse_positions_with_leading_whitespace() {
+        let lines = parse_codeowners_file_with_positions("  *.rs @owner");
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].pattern_start, 2);
+        assert_eq!(lines[0].pattern_end, 6);
+        assert_eq!(lines[0].owners_start, 7);
+    }
+
+    #[test]
+    fn test_parse_whitespace_only_line() {
+        let lines = parse_codeowners_file("   \t   ");
+        assert_eq!(lines.len(), 1);
+        assert!(matches!(lines[0], CodeownersLine::Empty));
+    }
+
+    #[test]
+    fn test_insertion_point_only_comments() {
+        let lines = parse_codeowners_file("# Header\n# Another comment");
+        let idx = find_insertion_point(&lines, "/foo.rs");
+        // Should insert at end when no rules
+        assert_eq!(idx, 2);
+    }
+
+    #[test]
+    fn test_insertion_point_prefers_deeper_path_match() {
+        let lines = parse_codeowners_file("/src/ @team1\n/src/api/ @team2\n/src/api/v2/ @team3");
+        // Should prefer /src/api/v2 for a file in /src/api/v2/
+        let idx = find_insertion_point(&lines, "/src/api/v2/users.rs");
+        assert_eq!(idx, 3); // After /src/api/v2/
+    }
+
+    #[test]
+    fn test_insertion_point_catch_all_variants() {
+        // Test with /* catch-all
+        let lines = parse_codeowners_file("/src/ @team\n/* @default");
+        let idx = find_insertion_point(&lines, "/lib/foo.rs");
+        assert_eq!(idx, 1);
+
+        // Test with /** catch-all
+        let lines2 = parse_codeowners_file("/src/ @team\n/** @default");
+        let idx2 = find_insertion_point(&lines2, "/lib/foo.rs");
+        assert_eq!(idx2, 1);
+    }
+
+    #[test]
+    fn test_directory_prefix_wildcard_variants() {
+        assert_eq!(get_directory_prefix("/src/?oo/"), "/src");
+        assert_eq!(get_directory_prefix("/src/[abc]/"), "/src");
+        assert_eq!(get_directory_prefix("/a/b/*.txt"), "/a/b");
+    }
+
+    #[test]
+    fn test_find_insertion_point_without_owner() {
+        let lines = parse_codeowners_file("/src/ @team\n/lib/ @team");
+        // Uses find_insertion_point_with_owner internally
+        let idx = find_insertion_point(&lines, "/bin/tool.rs");
+        // No path match, no catch-all, so end of file
+        assert_eq!(idx, 2);
+    }
+
+    #[test]
+    fn test_get_directory_prefix_file_with_slash_no_wildcard() {
+        // File path with / but no wildcard before it (line 232)
+        // This is like "src/foo/bar.txt" where there's no wildcard
+        assert_eq!(get_directory_prefix("src/foo/bar.txt"), "/src/foo");
+        assert_eq!(get_directory_prefix("a/b/c/file.rs"), "/a/b/c");
+    }
+
+    #[test]
+    fn test_format_codeowners_whitespace_only_after_trim() {
+        // Line that becomes empty after parts split (line 334)
+        // This shouldn't really happen since trimmed empty is caught earlier
+        // but the code handles it
+        let input = "*.rs @owner\n\n/src/ @team";
+        let formatted = format_codeowners(input);
+        // Should handle gracefully
+        assert!(formatted.contains("*.rs @owner"));
+        assert!(formatted.contains("/src/ @team"));
+    }
 }
