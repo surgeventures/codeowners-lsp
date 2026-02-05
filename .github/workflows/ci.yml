@@ -16,17 +16,43 @@ env:
   BINARY_NAME: codeowners-lsp
 
 jobs:
-  checks:
-    name: Checks
+  check:
+    name: Check
+    runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-targets
+
+  clippy:
+    name: Clippy
     runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
+
+  fmt:
+    name: Format
+    runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  test:
+    name: Test
+    runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --all
 
   # Check if version changed (only on main)
@@ -34,7 +60,7 @@ jobs:
     name: Check Version
     runs-on: "runs-on=${{ github.run_id }}/pool=tiny-arm64"
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [checks]
+    needs: [check, clippy, fmt, test]
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}
@@ -94,7 +120,7 @@ jobs:
         if: contains(matrix.target, '-musl')
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends musl-tools
+          sudo apt-get install -y musl-tools
 
       - uses: Swatinem/rust-cache@v2
         with:

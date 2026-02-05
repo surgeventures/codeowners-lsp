@@ -214,7 +214,7 @@ codeowners-lsp  # Communicates over stdio
 
 ### Zed
 
-Use the [codeowners-zed](https://github.com/radiosilence/codeowners-zed) extension (handles installation automatically).
+Use the [codeowners-zed](https://github.com/surgeventures/codeowners-zed) extension (handles installation automatically).
 
 ## Configuration
 
