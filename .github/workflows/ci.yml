@@ -18,7 +18,7 @@ env:
 jobs:
   checks:
     name: Checks
-    runs-on: "runs-on=${{ github.run_id }}/pool=2cpu-linux-x64"
+    runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -73,16 +73,16 @@ jobs:
       matrix:
         include:
           - name: linux-x64-gnu
-            runner: "runs-on=${{ github.run_id }}/pool=2cpu-linux-x64"
+            runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
             target: x86_64-unknown-linux-gnu
           - name: linux-arm64-gnu
-            runner: "runs-on=${{ github.run_id }}/pool=2cpu-linux-arm64"
+            runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
             target: aarch64-unknown-linux-gnu
           - name: linux-x64-musl
-            runner: "runs-on=${{ github.run_id }}/pool=2cpu-linux-x64"
+            runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
             target: x86_64-unknown-linux-musl
           - name: linux-arm64-musl
-            runner: "runs-on=${{ github.run_id }}/pool=2cpu-linux-arm64"
+            runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
             target: aarch64-unknown-linux-musl
           - name: darwin-x64
             runner: macos-14
