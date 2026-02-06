@@ -18,7 +18,7 @@ env:
 jobs:
   check:
     name: Check
-    runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -27,7 +27,7 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -38,7 +38,7 @@ jobs:
 
   fmt:
     name: Format
-    runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -48,7 +48,7 @@ jobs:
 
   test:
     name: Test
-    runs-on: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -60,23 +60,32 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: [check, clippy, fmt, test]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+            os: ubuntu-latest
+            archive: tar.gz
           - target: aarch64-unknown-linux-gnu
-            runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
+            os: ubuntu-24.04-arm
+            archive: tar.gz
           - target: x86_64-unknown-linux-musl
-            runner: "runs-on/runner=2cpu-linux-x64/run-id=${{ github.run_id }}"
+            os: ubuntu-latest
+            archive: tar.gz
           - target: aarch64-unknown-linux-musl
-            runner: "runs-on/runner=2cpu-linux-arm64/run-id=${{ github.run_id }}"
+            os: ubuntu-24.04-arm
+            archive: tar.gz
           - target: x86_64-apple-darwin
-            runner: macos-14
+            os: macos-latest
+            archive: tar.gz
           - target: aarch64-apple-darwin
-            runner: macos-14
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -96,21 +105,28 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
           tar -czvf ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz ${{ env.BINARY_NAME }} codeowners-cli
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          7z a ../../../${{ env.BINARY_NAME }}-${{ matrix.target }}.zip ${{ env.BINARY_NAME }}.exe codeowners-cli.exe
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ env.BINARY_NAME }}-${{ matrix.target }}
-          path: ${{ env.BINARY_NAME }}-${{ matrix.target }}.tar.gz
+          path: ${{ env.BINARY_NAME }}-${{ matrix.target }}.${{ matrix.archive }}
 
   # Check if version changed
   check-version:
     name: Check Version
     needs: [build]
-    runs-on: "runs-on=${{ github.run_id }}/pool=tiny-arm64"
+    runs-on: ubuntu-latest
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}
@@ -143,7 +159,7 @@ jobs:
     name: Release
     needs: [check-version]
     if: needs.check-version.outputs.should_release == 'true'
-    runs-on: "runs-on=${{ github.run_id }}/pool=tiny-arm64"
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
