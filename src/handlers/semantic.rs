@@ -55,7 +55,7 @@ pub fn semantic_tokens(content: &str) -> Vec<SemanticToken> {
 
             while char_idx < pattern_chars.len() {
                 let c = pattern_chars[char_idx];
-                if c == '*' || c == '?' || c == '[' || c == ']' {
+                if c == '*' || c == '?' {
                     // Operator (glob char)
                     let abs_pos = pattern_start + char_idx as u32;
                     data.push(SemanticToken {
@@ -76,7 +76,7 @@ pub fn semantic_tokens(content: &str) -> Vec<SemanticToken> {
             }
 
             // Highlight the whole pattern as string if no globs
-            if !pattern.contains('*') && !pattern.contains('?') && !pattern.contains('[') {
+            if !pattern.contains('*') && !pattern.contains('?') {
                 data.push(SemanticToken {
                     delta_line: line_num - prev_line,
                     delta_start: if line_num == prev_line {
@@ -93,10 +93,13 @@ pub fn semantic_tokens(content: &str) -> Vec<SemanticToken> {
             }
         }
 
-        // Highlight owners
+        // Highlight owners using forward search to handle duplicates correctly
+        let mut owner_search_start = 0;
         for &owner in &parts[1..] {
-            if let Some(owner_start) = line.rfind(owner) {
-                let owner_start = owner_start as u32;
+            // Find the next occurrence of this owner at or after owner_search_start
+            if let Some(rel_pos) = line[owner_search_start..].find(owner) {
+                let owner_start = (owner_search_start + rel_pos) as u32;
+                owner_search_start = owner_search_start + rel_pos + owner.len();
                 let token_type = if owner.starts_with('@') {
                     if owner.contains('/') {
                         3 // class (team)
@@ -167,9 +170,9 @@ pub fn folding_ranges(content: &str) -> Vec<FoldingRange> {
     let mut section_start: Option<u32> = None;
     for line in &lines {
         if let CodeownersLine::Comment(text) = &line.content {
-            let trimmed = text.trim();
-            if !trimmed.is_empty()
-                && trimmed
+            let section_text = text.trim().trim_start_matches('#').trim();
+            if !section_text.is_empty()
+                && section_text
                     .chars()
                     .next()
                     .map(|c| c.is_uppercase())

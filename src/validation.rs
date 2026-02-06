@@ -65,6 +65,13 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_owner_with_period() {
+        // GitHub usernames/orgs don't allow periods
+        assert!(validate_owner("@user.name").is_some());
+        assert!(validate_owner("@org.name/team").is_some());
+    }
+
+    #[test]
     fn test_invalid_owner_no_at() {
         assert!(validate_owner("username").is_some());
     }
