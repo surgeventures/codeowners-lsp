@@ -394,6 +394,15 @@ impl Backend {
             return Vec::new();
         }
 
+        // Skip files outside the workspace root
+        if let Some(root) = self.workspace_root.read().unwrap().as_ref() {
+            if let Ok(path) = uri.to_file_path() {
+                if !path.starts_with(root) {
+                    return Vec::new();
+                }
+            }
+        }
+
         let config = {
             let settings = self.settings.read().unwrap();
             settings.diagnostic_config()

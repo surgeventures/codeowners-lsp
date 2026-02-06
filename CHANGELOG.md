@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.16.3] - 2026-02-06
+
+### Fixed
+
+- **Files outside workspace no longer flagged as unowned** — opening a file outside the project root would trigger `file-not-owned` diagnostics because the path couldn't be resolved relative to the workspace.
+
 ## [0.16.2] - 2026-02-06
 
 ### Fixed
