@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.16.2] - 2026-02-06
+
+### Fixed
+
+- **Go-to-definition disabled** — hijacked click-to-navigate on every file to jump to CODEOWNERS, breaking normal code navigation. Ownership info is available via hover tooltip.
+
 ## [0.16.1] - 2026-02-06
 
 ### Fixed

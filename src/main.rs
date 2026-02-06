@@ -1028,7 +1028,7 @@ impl LanguageServer for Backend {
                     ],
                     work_done_progress_options: Default::default(),
                 }),
-                definition_provider: Some(OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(false)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec!["/".to_string(), "@".to_string()]),
                     ..Default::default()
