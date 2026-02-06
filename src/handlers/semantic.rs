@@ -2,7 +2,9 @@
 
 use tower_lsp::lsp_types::*;
 
-use crate::parser::{parse_codeowners_file_with_positions, CodeownersLine};
+use crate::parser::{
+    find_inline_comment_start, parse_codeowners_file_with_positions, CodeownersLine,
+};
 
 /// Generate semantic tokens for syntax highlighting
 pub fn semantic_tokens(content: &str) -> Vec<SemanticToken> {
@@ -38,8 +40,13 @@ pub fn semantic_tokens(content: &str) -> Vec<SemanticToken> {
             continue;
         }
 
-        // Parse rule: pattern owners...
-        let parts: Vec<&str> = line.split_whitespace().collect();
+        // Parse rule: pattern owners... (stop at inline comment)
+        let all_parts: Vec<&str> = line.split_whitespace().collect();
+        let parts: Vec<&str> = all_parts
+            .iter()
+            .take_while(|part| !part.starts_with('#'))
+            .copied()
+            .collect();
         if parts.is_empty() {
             continue;
         }
@@ -124,6 +131,25 @@ pub fn semantic_tokens(content: &str) -> Vec<SemanticToken> {
                 prev_line = line_num;
                 prev_char = owner_start;
             }
+        }
+
+        // Highlight inline comment if present
+        if let Some(comment_char_off) = find_inline_comment_start(line) {
+            let comment_len = line.chars().count() - comment_char_off;
+            let comment_start = comment_char_off as u32;
+            data.push(SemanticToken {
+                delta_line: line_num - prev_line,
+                delta_start: if line_num == prev_line {
+                    comment_start - prev_char
+                } else {
+                    comment_start
+                },
+                length: comment_len as u32,
+                token_type: 0, // comment
+                token_modifiers_bitset: 0,
+            });
+            prev_line = line_num;
+            prev_char = comment_start;
         }
     }
 
