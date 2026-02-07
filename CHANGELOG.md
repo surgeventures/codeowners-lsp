@@ -1,17 +1,95 @@
 # Changelog
 
-## [0.15.5] - 2026-02-06
+## [0.17.0] - 2026-02-06
+
+### Added
+
+- **Snippet completions** — pattern completions now include snippet variants with owner placeholders. Select `src/** @...` and cursor lands on `@owner` ready to type.
+- **Rich inlay hint tooltips** — hover over file count hints to see markdown-formatted pattern info, match count, and owners.
+
+### Changed
+
+- Enabled `tower-lsp` proposed features for future LSP 3.18 capabilities.
+
+## [0.16.3] - 2026-02-06
 
 ### Fixed
 
-- **Bulletproof inline comment handling** - Inline comments (`*.rs @owner # contact info`) are now correctly handled across the entire codebase:
+- **Files outside workspace no longer flagged as unowned** — opening a file outside the project root would trigger `file-not-owned` diagnostics because the path couldn't be resolved relative to the workspace.
+
+## [0.16.2] - 2026-02-06
+
+### Fixed
+
+- **Go-to-definition disabled** — hijacked click-to-navigate on every file to jump to CODEOWNERS, breaking normal code navigation. Ownership info is available via hover tooltip.
+
+## [0.16.1] - 2026-02-06
+
+### Fixed
+
+- **Linked editing disabled** — was editing ALL occurrences of an owner across the entire file when you just wanted to change one line. Use rename (F2) for intentional cross-file renames.
+
+## [0.16.0] - 2026-02-06
+
+Performance optimizations across pattern matching, diagnostics, and file cache — driven by the new criterion benchmark suite.
+
+### Added
+
+- **Criterion benchmark suite** — 5 benchmark files covering parsing, pattern matching, diagnostics, file cache, and LSP handlers. Generates a 1000-rule CODEOWNERS and 50k synthetic file paths with seeded RNG for deterministic, reproducible benchmarking.
+- **`scripts/bench-summary.sh`** — prints a human-readable table of all benchmark medians from criterion JSON output.
+
+### Performance
+
+- **Extension pattern matching: -95.4%** (10.94ms → 500us for 50k files) — new `ExtensionSuffix` variant in `CompiledPattern` uses `ends_with` instead of glob matching for `*.ext` patterns.
+- **Directory pattern matching: -69.7%** (10.67ms → 3.23ms for 50k files) — eliminated `format!("/{}/", dir)` allocation per path in `UnanchoredDirectory` matching, replaced with byte-level segment boundary checks.
+- **Diagnostics (1000 rules, no cache): -78.5%** (39.8ms → 8.5ms) — skip already-shadowed patterns in the O(n²) subsumption loop; fast-path catch-all patterns (`*`/`**`) that trivially subsume everything.
+- **Diagnostics (1000 rules, with cache): -74.4%** (41.5ms → 10.6ms) — same subsumption improvements.
+- **get_unowned_files: -86.4%** (8.07ms → 1.10ms) — `count_matches`/`has_matches`/`get_matches` now compile to `CompiledPattern` once per call instead of re-parsing per file.
+- **count_matches cold: -27.3%** (1.73ms → 1.26ms) — same compile-once optimization.
+- **check_file_ownership_parsed: -61.0%** (45.6us → 17.8us) — benefits from pattern matching improvements.
+
+### Changed
+
+- Shared code extracted to lib crate (`src/lib.rs`) — enables criterion benchmarks to import internal modules. Both binaries re-export via `pub use`.
+
+## [0.15.5] - 2026-02-06
+
+Comprehensive code audit (Opus 4.6 reviewing Opus 4.5's work) plus bulletproof inline comment handling.
+
+### Security
+
+- **Command injection in lookup.rs** - Email from git shortlog was interpolated directly into shell commands. Now sanitized to allow only safe characters before substitution.
+
+### Fixed
+
+- **Inline comment handling** - Inline comments (`*.rs @owner # contact info`) now handled correctly everywhere:
   - Parser tracks comment boundary position on each line
   - Formatter preserves inline comments through roundtrip formatting
   - `find_owner_at_position` no longer returns `@mentions` inside comments
   - Semantic tokens emit proper comment highlighting for inline comment text
-  - Diagnostics and rename operations are bounded to the non-comment portion of lines
+  - Diagnostics and rename operations bounded to the non-comment portion of lines
 
-- **Username validation** - Removed `_` (underscore) from allowed characters in GitHub username/team regexes. GitHub usernames only allow alphanumeric characters and hyphens.
+- **Username validation** - Removed `_` and `.` from allowed characters in GitHub username/team regexes. GitHub usernames only allow alphanumeric characters and hyphens.
+
+- **find_nth_owner_position** - Linked editing, find references, and rename all used vec index instead of occurrence count, producing wrong positions when an owner appears multiple times on a line.
+
+- **prepare_rename wrong highlight** - Used `line.find()` which always matched the first occurrence regardless of cursor position. Now scans forward checking word boundaries.
+
+- **rfind in semantic tokens** - `line.rfind(owner)` always found the last occurrence, corrupting delta calculations for duplicate owners. Replaced with forward search.
+
+- **blame.rs crash paths** - `parse().ok()?` aborted all results on a single malformed shortlog line (now skips). `partial_cmp().unwrap()` could panic on NaN (now `total_cmp()`). Directory prefix matching lacked `/` boundary check.
+
+- **Section header detection** - Dead code in symbols, semantic tokens, and selection handlers. Comments include `#` prefix so the check always failed. Fixed to strip `#` first.
+
+- **Unsupported `[...]` syntax** - Removed character class references from signature help docs and semantic token highlighting. CODEOWNERS does not support character classes.
+
+- **selection.rs dedup without sort** - `dedup()` only removes adjacent duplicates; added `sort_by` first.
+
+- **Code lens empty owners** - Trailing separator when rule has no owners.
+
+### Performance
+
+- **Parse-once optimization** - `tree` and `check` commands re-parsed CODEOWNERS for every file. Extracted `check_file_ownership_parsed()` that takes pre-parsed lines.
 
 ## [0.15.4] - 2026-02-06
 

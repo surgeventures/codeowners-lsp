@@ -1,12 +1,14 @@
-mod diagnostics;
-mod file_cache;
-mod github;
-mod handlers;
-mod ownership;
-mod parser;
-mod pattern;
-mod settings;
-mod validation;
+// Re-export shared modules so `crate::*` paths still resolve within this binary
+use codeowners_lsp as lib;
+pub use lib::diagnostics;
+pub use lib::file_cache;
+pub use lib::github;
+pub use lib::handlers;
+pub use lib::ownership;
+pub use lib::parser;
+pub use lib::pattern;
+pub use lib::settings;
+pub use lib::validation;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -390,6 +392,15 @@ impl Backend {
         // Skip CODEOWNERS file itself
         if self.is_codeowners_file(uri) {
             return Vec::new();
+        }
+
+        // Skip files outside the workspace root
+        if let Some(root) = self.workspace_root.read().unwrap().as_ref() {
+            if let Ok(path) = uri.to_file_path() {
+                if !path.starts_with(root) {
+                    return Vec::new();
+                }
+            }
         }
 
         let config = {
@@ -1026,7 +1037,7 @@ impl LanguageServer for Backend {
                     ],
                     work_done_progress_options: Default::default(),
                 }),
-                definition_provider: Some(OneOf::Left(true)),
+                definition_provider: Some(OneOf::Left(false)),
                 completion_provider: Some(CompletionOptions {
                     trigger_characters: Some(vec!["/".to_string(), "@".to_string()]),
                     ..Default::default()
@@ -1073,7 +1084,7 @@ impl LanguageServer for Backend {
                 }),
                 selection_range_provider: Some(SelectionRangeProviderCapability::Simple(true)),
                 linked_editing_range_provider: Some(LinkedEditingRangeServerCapabilities::Simple(
-                    true,
+                    false,
                 )),
                 ..Default::default()
             },
@@ -1081,6 +1092,7 @@ impl LanguageServer for Backend {
                 name: "codeowners-lsp".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
+            offset_encoding: None,
         })
     }
 
@@ -1687,9 +1699,18 @@ impl LanguageServer for Backend {
                                 && line.line_number <= range.end.line
                         })
                         .filter_map(|line| {
-                            if let CodeownersLine::Rule { pattern, .. } = &line.content {
+                            if let CodeownersLine::Rule { pattern, owners, .. } = &line.content {
                                 // Compute and cache count (blocking, but only for visible ~50 lines)
                                 let count = cache.count_matches(pattern);
+                                let owners_str = if owners.is_empty() {
+                                    "*unowned*".to_string()
+                                } else {
+                                    owners
+                                        .iter()
+                                        .map(|o| format!("`{}`", o))
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                };
                                 Some(InlayHint {
                                     position: Position {
                                         line: line.line_number,
@@ -1702,11 +1723,16 @@ impl LanguageServer for Backend {
                                     )),
                                     kind: None,
                                     text_edits: None,
-                                    tooltip: Some(InlayHintTooltip::String(format!(
-                                        "This pattern matches {} {} in the repository",
-                                        count,
-                                        if count == 1 { "file" } else { "files" }
-                                    ))),
+                                    tooltip: Some(InlayHintTooltip::MarkupContent(MarkupContent {
+                                        kind: MarkupKind::Markdown,
+                                        value: format!(
+                                            "**Pattern:** `{}`\n\n**Matches:** {} {}\n\n**Owners:** {}",
+                                            pattern,
+                                            count,
+                                            if count == 1 { "file" } else { "files" },
+                                            owners_str
+                                        ),
+                                    })),
                                     padding_left: Some(true),
                                     padding_right: Some(false),
                                     data: None,
@@ -1724,13 +1750,26 @@ impl LanguageServer for Backend {
         }
 
         let (label, tooltip) = match self.get_owners_for_file(uri) {
-            Some(owners) => (
-                format!("Owned by: {}", owners),
-                "File ownership from CODEOWNERS".to_string(),
-            ),
+            Some(owners) => {
+                let owners_md = owners
+                    .split_whitespace()
+                    .map(|o| format!("`{}`", o))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (
+                    format!("Owned by: {}", owners),
+                    MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: format!("**Owners:** {}\n\n*From CODEOWNERS*", owners_md),
+                    },
+                )
+            }
             None => (
                 "Owned by nobody".to_string(),
-                "No CODEOWNERS rule matches this file".to_string(),
+                MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: "**No owner**\n\n*No CODEOWNERS rule matches this file*".to_string(),
+                },
             ),
         };
 
@@ -1742,7 +1781,7 @@ impl LanguageServer for Backend {
             label: InlayHintLabel::String(label),
             kind: None,
             text_edits: None,
-            tooltip: Some(InlayHintTooltip::String(tooltip)),
+            tooltip: Some(InlayHintTooltip::MarkupContent(tooltip)),
             padding_left: Some(false),
             padding_right: Some(true),
             data: None,
@@ -1926,7 +1965,6 @@ impl LanguageServer for Backend {
                     label: label.clone(),
                     kind: Some(kind),
                     detail: Some(detail),
-                    // text_edit replaces the current word with the completion
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                         range: replace_range,
                         new_text: label,
@@ -1934,6 +1972,25 @@ impl LanguageServer for Backend {
                     ..Default::default()
                 }
             };
+
+        // Helper to create snippet completion with tabstops
+        let make_snippet = |label: String,
+                            insert_text: String,
+                            kind: CompletionItemKind,
+                            detail: String|
+         -> CompletionItem {
+            CompletionItem {
+                label,
+                kind: Some(kind),
+                detail: Some(detail),
+                insert_text_format: Some(InsertTextFormat::SNIPPET),
+                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                    range: replace_range,
+                    new_text: insert_text,
+                })),
+                ..Default::default()
+            }
+        };
 
         // Path completions - trigger on start of line or when typing a path
         // Valid patterns: /src/, src/, ./src/, *.rs, etc.
@@ -1950,41 +2007,61 @@ impl LanguageServer for Backend {
                 let paths = cache.complete_path(prefix);
                 for path in paths {
                     let is_dir = path.ends_with('/');
-                    items.push(make_completion(
-                        path,
-                        if is_dir {
-                            CompletionItemKind::FOLDER
-                        } else {
-                            CompletionItemKind::FILE
-                        },
-                        if is_dir {
-                            "Directory".to_string()
-                        } else {
-                            "File".to_string()
-                        },
-                    ));
+                    if is_dir {
+                        // Plain directory completion
+                        items.push(make_completion(
+                            path.clone(),
+                            CompletionItemKind::FOLDER,
+                            "Directory".to_string(),
+                        ));
+                        // Snippet: dir/** with owner placeholder
+                        items.push(make_snippet(
+                            format!("{}** @...", &path),
+                            format!("{}** ${{1:@owner}}", &path),
+                            CompletionItemKind::SNIPPET,
+                            "Directory rule with owner".to_string(),
+                        ));
+                    } else {
+                        // File completion with owner placeholder snippet
+                        items.push(make_completion(
+                            path.clone(),
+                            CompletionItemKind::FILE,
+                            "File".to_string(),
+                        ));
+                        items.push(make_snippet(
+                            format!("{} @...", &path),
+                            format!("{} ${{1:@owner}}", &path),
+                            CompletionItemKind::SNIPPET,
+                            "File rule with owner".to_string(),
+                        ));
+                    }
                 }
 
+                // Glob pattern snippets
                 if prefix.is_empty() || "*".starts_with(prefix) {
-                    items.push(make_completion(
-                        "*".to_string(),
+                    items.push(make_snippet(
+                        "* @...".to_string(),
+                        "* ${1:@owner}".to_string(),
                         CompletionItemKind::SNIPPET,
-                        "Match all files".to_string(),
+                        "Catch-all rule".to_string(),
                     ));
-                    items.push(make_completion(
-                        "*.rs".to_string(),
+                    items.push(make_snippet(
+                        "*.rs @...".to_string(),
+                        "*.rs ${1:@owner}".to_string(),
                         CompletionItemKind::SNIPPET,
-                        "Match Rust files".to_string(),
+                        "Rust files rule".to_string(),
                     ));
-                    items.push(make_completion(
-                        "*.ts".to_string(),
+                    items.push(make_snippet(
+                        "*.ts @...".to_string(),
+                        "*.ts ${1:@owner}".to_string(),
                         CompletionItemKind::SNIPPET,
-                        "Match TypeScript files".to_string(),
+                        "TypeScript files rule".to_string(),
                     ));
-                    items.push(make_completion(
-                        "*.js".to_string(),
+                    items.push(make_snippet(
+                        "*.js @...".to_string(),
+                        "*.js ${1:@owner}".to_string(),
                         CompletionItemKind::SNIPPET,
-                        "Match JavaScript files".to_string(),
+                        "JavaScript files rule".to_string(),
                     ));
                 }
             }
