@@ -260,7 +260,11 @@ impl GitHubClient {
                 }));
             }
         } else if status.as_u16() == 404 {
-            return Some(OwnerInfo::Invalid);
+            // GitHub returns 404 for both "team doesn't exist" AND "team exists
+            // but token lacks visibility" (no read:org scope). Unlike /users/
+            // which is public, we can't distinguish these cases, so treat as
+            // Unknown rather than Invalid to avoid false positives.
+            return Some(OwnerInfo::Unknown);
         }
         // 403 = no permission, treat as unknown (might be valid, just can't see)
         Some(OwnerInfo::Unknown)
@@ -822,7 +826,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_team_not_found() {
+    async fn test_fetch_team_not_found_is_unknown() {
+        // Team 404 is ambiguous (could be invisible, not nonexistent),
+        // so it should return Unknown (None), not Invalid (Some(false))
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
@@ -836,7 +842,12 @@ mod tests {
             .validate_owner("@myorg/nonexistent", "fake-token")
             .await;
 
-        assert_eq!(result, Some(false));
+        // 404 on teams = Unknown, not Invalid
+        assert_eq!(result, None);
+
+        // Should be cached as Unknown
+        let info = client.get_owner_info("@myorg/nonexistent").unwrap();
+        assert!(matches!(info, OwnerInfo::Unknown));
     }
 
     #[tokio::test]
@@ -1023,7 +1034,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_team_not_found() {
+    async fn test_validate_team_not_found_is_unknown() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
@@ -1037,7 +1048,8 @@ mod tests {
             .validate_team("someorg", "notfoundteam", "fake-token")
             .await;
 
-        assert_eq!(result, Some(false));
+        // Team 404 is ambiguous — returns None (Unknown)
+        assert_eq!(result, None);
     }
 
     #[tokio::test]

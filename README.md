@@ -266,6 +266,7 @@ duplicate-owner = "warning"      # default: warning
 shadowed-rule = "warning"        # default: warning
 no-owners = "off"                # default: hint
 github-owner-not-found = "warning"  # default: warning
+github-owner-unverified = "hint"    # default: hint
 ```
 
 ### LSP Initialization Options
@@ -299,16 +300,17 @@ JSON settings can also be passed via LSP init options (these override TOML confi
 
 ## Diagnostics
 
-| Code                     | Default | Description                                                          |
-| ------------------------ | ------- | -------------------------------------------------------------------- |
-| `invalid-pattern`        | error   | Pattern has invalid glob syntax                                      |
-| `invalid-owner`          | error   | Owner format invalid (must be `@user`, `@org/team`, or email)        |
-| `pattern-no-match`       | warning | Pattern doesn't match any files in the repository                    |
-| `duplicate-owner`        | warning | Same owner listed multiple times on one rule                         |
-| `shadowed-rule`          | warning | Rule is shadowed by a later rule (dead code, last match wins)        |
-| `no-owners`              | hint    | Rule has a pattern but no owners assigned                            |
-| `file-not-owned`         | error   | File has no matching CODEOWNERS rule (shown on non-CODEOWNERS files) |
-| `github-owner-not-found` | warning | Owner not found on GitHub (requires `validate_owners = true`)        |
+| Code                      | Default | Description                                                          |
+| ------------------------- | ------- | -------------------------------------------------------------------- |
+| `invalid-pattern`         | error   | Pattern has invalid glob syntax                                      |
+| `invalid-owner`           | error   | Owner format invalid (must be `@user`, `@org/team`, or email)        |
+| `pattern-no-match`        | warning | Pattern doesn't match any files in the repository                    |
+| `duplicate-owner`         | warning | Same owner listed multiple times on one rule                         |
+| `shadowed-rule`           | warning | Rule is shadowed by a later rule (dead code, last match wins)        |
+| `no-owners`               | hint    | Rule has a pattern but no owners assigned                            |
+| `file-not-owned`          | error   | File has no matching CODEOWNERS rule (shown on non-CODEOWNERS files) |
+| `github-owner-not-found`  | warning | Owner not found on GitHub (requires `validate_owners = true`)        |
+| `github-owner-unverified` | hint    | Owner couldn't be verified (token may lack `read:org` scope)         |
 
 Override severities in config with: `off`, `hint`, `info`, `warning`, `error`
 

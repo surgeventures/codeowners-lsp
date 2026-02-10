@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.17.1] - 2026-02-10
+
+### Fixed
+
+- **Team validation no longer false-positives on invisible teams** — GitHub's teams API returns 404 for teams the token can't see (not just nonexistent ones), causing valid teams to be flagged as "not found." Team 404s are now treated as ambiguous instead of invalid.
+
+### Added
+
+- **`github-owner-unverified` diagnostic** — new hint-level diagnostic for owners that couldn't be verified (e.g. teams invisible without `read:org` scope). Configurable severity like all other diagnostics.
+
 ## [0.17.0] - 2026-02-06
 
 ### Added
