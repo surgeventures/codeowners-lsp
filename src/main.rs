@@ -2511,7 +2511,7 @@ fn format_owner_hover(owner: &str, info: Option<&github::OwnerInfo>) -> String {
         Some(github::OwnerInfo::Invalid) => {
             format!("## {}\n\n⚠️ **Owner not found on GitHub**", owner)
         }
-        Some(github::OwnerInfo::Unknown) | None => {
+        Some(github::OwnerInfo::Unknown(_)) | None => {
             // Build basic link even without cached info
             let url = if let Some(username) = owner.strip_prefix('@') {
                 if username.contains('/') {

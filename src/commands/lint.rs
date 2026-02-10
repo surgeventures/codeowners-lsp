@@ -433,7 +433,10 @@ mod tests {
     /// generate "not found" diagnostics.
     #[test]
     fn test_unknown_team_does_not_generate_diagnostic() {
-        let client = make_client_with_cache(vec![("@org/invisible-team", OwnerInfo::Unknown)]);
+        let client = make_client_with_cache(vec![(
+            "@org/invisible-team",
+            OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+        )]);
         let owners = vec![("@org/invisible-team".to_string(), 3, 8, 19)];
         let diags = owner_diagnostics_from_cache(&owners, &client);
 
@@ -500,7 +503,10 @@ mod tests {
                     repos_count: None,
                 }),
             ),
-            ("@org/unknown-team", OwnerInfo::Unknown),
+            (
+                "@org/unknown-team",
+                OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+            ),
             ("@truly-gone", OwnerInfo::Invalid),
         ]);
 

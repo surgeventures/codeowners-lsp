@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.17.3] - 2026-02-10
+
+### Changed
+
+- **`OwnerInfo::Unknown` now carries a reason string** — validation failures now report exactly what went wrong instead of a generic "couldn't validate" message:
+  - Team 404: "team not found or token lacks read:org scope"
+  - 403 Forbidden: "forbidden - check token permissions"
+  - 429 Rate limit: "rate limit exceeded"
+  - Network error: "network error: \<details\>"
+- **Network errors are now cached** — previously returned `None` (uncached), so the reason was lost and retries were silent. Now cached as `Unknown` with the error message.
+- **GHA pipeline never fails on validation errors** — `Unknown` owners produce warnings, only confirmed `Invalid` owners cause exit 1.
+
+## [0.17.2] - 2026-02-10
+
+### Fixed
+
+- **Unknown vs Invalid teams distinguished correctly** — `get_cached()` collapsed both into `Some(false)`, causing `gha` and `lint` to report ambiguous team 404s as "not found on GitHub." Code now uses `get_owner_info()` which preserves the full `OwnerInfo` enum.
+
 ## [0.17.1] - 2026-02-10
 
 ### Fixed

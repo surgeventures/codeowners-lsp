@@ -37,8 +37,8 @@ pub enum OwnerInfo {
     Team(TeamInfo),
     /// Invalid owner (doesn't exist)
     Invalid,
-    /// Couldn't validate (no permission, rate limited, etc)
-    Unknown,
+    /// Couldn't validate (no permission, rate limited, network error, etc)
+    Unknown(String),
 }
 
 impl OwnerInfo {
@@ -204,7 +204,7 @@ impl GitHubClient {
     /// Fetch GitHub user info
     async fn fetch_user(&self, username: &str, token: &str) -> Option<OwnerInfo> {
         let url = format!("{}/users/{}", self.base_url, username);
-        let response = self
+        let response = match self
             .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", token))
@@ -212,7 +212,10 @@ impl GitHubClient {
             .header("Accept", "application/vnd.github+json")
             .send()
             .await
-            .ok()?;
+        {
+            Ok(r) => r,
+            Err(e) => return Some(OwnerInfo::Unknown(format!("network error: {e}"))),
+        };
 
         let status = response.status();
         if status.is_success() {
@@ -228,15 +231,20 @@ impl GitHubClient {
             }
         } else if status.as_u16() == 404 {
             return Some(OwnerInfo::Invalid);
+        } else if status.as_u16() == 429 {
+            return Some(OwnerInfo::Unknown("rate limit exceeded".to_string()));
+        } else if status.as_u16() == 403 {
+            return Some(OwnerInfo::Unknown(
+                "forbidden - check token permissions".to_string(),
+            ));
         }
-        // 403, rate limit, network error -> Unknown
-        Some(OwnerInfo::Unknown)
+        Some(OwnerInfo::Unknown(format!("HTTP {status}")))
     }
 
     /// Fetch GitHub team info
     async fn fetch_team(&self, org: &str, team_slug: &str, token: &str) -> Option<OwnerInfo> {
         let url = format!("{}/orgs/{}/teams/{}", self.base_url, org, team_slug);
-        let response = self
+        let response = match self
             .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", token))
@@ -244,7 +252,10 @@ impl GitHubClient {
             .header("Accept", "application/vnd.github+json")
             .send()
             .await
-            .ok()?;
+        {
+            Ok(r) => r,
+            Err(e) => return Some(OwnerInfo::Unknown(format!("network error: {e}"))),
+        };
 
         let status = response.status();
         if status.is_success() {
@@ -264,10 +275,17 @@ impl GitHubClient {
             // but token lacks visibility" (no read:org scope). Unlike /users/
             // which is public, we can't distinguish these cases, so treat as
             // Unknown rather than Invalid to avoid false positives.
-            return Some(OwnerInfo::Unknown);
+            return Some(OwnerInfo::Unknown(
+                "team not found or token lacks read:org scope".to_string(),
+            ));
+        } else if status.as_u16() == 429 {
+            return Some(OwnerInfo::Unknown("rate limit exceeded".to_string()));
+        } else if status.as_u16() == 403 {
+            return Some(OwnerInfo::Unknown(
+                "forbidden - check token permissions".to_string(),
+            ));
         }
-        // 403 = no permission, treat as unknown (might be valid, just can't see)
-        Some(OwnerInfo::Unknown)
+        Some(OwnerInfo::Unknown(format!("HTTP {status}")))
     }
 
     /// Validate a GitHub user exists (returns bool for backwards compat)
@@ -335,7 +353,7 @@ impl GitHubClient {
         match info {
             OwnerInfo::User(_) | OwnerInfo::Team(_) => Some(true),
             OwnerInfo::Invalid => Some(false),
-            OwnerInfo::Unknown => None,
+            OwnerInfo::Unknown(_) => None,
         }
     }
 
@@ -455,7 +473,7 @@ mod tests {
         assert!(!invalid.is_valid());
         assert!(invalid.is_invalid());
 
-        let unknown = OwnerInfo::Unknown;
+        let unknown = OwnerInfo::Unknown("test".into());
         assert!(!unknown.is_valid());
         assert!(!unknown.is_invalid());
     }
@@ -593,7 +611,7 @@ mod tests {
                 .insert("@invalid".to_string(), OwnerInfo::Invalid);
             cache
                 .owners
-                .insert("@unknown".to_string(), OwnerInfo::Unknown);
+                .insert("@unknown".to_string(), OwnerInfo::Unknown("test".into()));
         }
 
         let cached = client.get_cached_owners();
@@ -682,9 +700,10 @@ mod tests {
 
         {
             let mut cache = client.cache.write().unwrap();
-            cache
-                .owners
-                .insert("@org/unknown-team".to_string(), OwnerInfo::Unknown);
+            cache.owners.insert(
+                "@org/unknown-team".to_string(),
+                OwnerInfo::Unknown("test".into()),
+            );
             cache
                 .owners
                 .insert("@org/invalid-team".to_string(), OwnerInfo::Invalid);
@@ -697,7 +716,7 @@ mod tests {
         // get_owner_info() preserves the distinction
         assert!(matches!(
             client.get_owner_info("@org/unknown-team"),
-            Some(OwnerInfo::Unknown)
+            Some(OwnerInfo::Unknown(_))
         ));
         assert!(matches!(
             client.get_owner_info("@org/invalid-team"),
@@ -746,10 +765,10 @@ mod tests {
         let deserialized: OwnerInfo = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized, OwnerInfo::Invalid));
 
-        let unknown = OwnerInfo::Unknown;
+        let unknown = OwnerInfo::Unknown("rate limit exceeded".into());
         let json = serde_json::to_string(&unknown).unwrap();
         let deserialized: OwnerInfo = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, OwnerInfo::Unknown));
+        assert!(matches!(deserialized, OwnerInfo::Unknown(ref r) if r == "rate limit exceeded"));
     }
 
     #[test]
@@ -888,9 +907,9 @@ mod tests {
         // 404 on teams = Unknown, not Invalid
         assert_eq!(result, None);
 
-        // Should be cached as Unknown
+        // Should be cached as Unknown with reason
         let info = client.get_owner_info("@myorg/nonexistent").unwrap();
-        assert!(matches!(info, OwnerInfo::Unknown));
+        assert!(matches!(info, OwnerInfo::Unknown(ref r) if r.contains("read:org")));
     }
 
     #[tokio::test]

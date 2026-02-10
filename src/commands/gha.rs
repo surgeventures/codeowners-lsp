@@ -257,6 +257,11 @@ pub async fn gha(opts: GhaOptions) -> ExitCode {
                     eprintln!("::error::Invalid teams found in CODEOWNERS for changed files");
                 }
                 failed = true;
+            } else if !result.unknown.is_empty() && opts.output_annotations {
+                eprintln!(
+                    "::warning::Could not verify {} team(s) in CODEOWNERS for changed files - check token permissions",
+                    result.unknown.len()
+                );
             }
             results.owners_changed = Some(result);
         }
@@ -268,6 +273,11 @@ pub async fn gha(opts: GhaOptions) -> ExitCode {
                 eprintln!(
                     "::warning::Invalid teams found in CODEOWNERS ({} invalid)",
                     result.invalid.len()
+                );
+            } else if !result.unknown.is_empty() && opts.output_annotations {
+                eprintln!(
+                    "::warning::Could not verify {} team(s) in CODEOWNERS - check token permissions",
+                    result.unknown.len()
                 );
             }
             results.owners_all = Some(result);
@@ -514,19 +524,39 @@ fn print_human_summary(results: &GhaResults) {
 
     // Owners (changed files)
     if let Some(ref owners) = results.owners_changed {
-        let invalid_count = owners.invalid.len() + owners.unknown.len();
-        if invalid_count > 0 {
+        if !owners.invalid.is_empty() {
             println!(
                 "  {} Owners (changed): {} invalid",
                 "✗".red(),
-                invalid_count.to_string().red()
+                owners.invalid.len().to_string().red()
             );
-            for inv in owners.invalid.iter().chain(owners.unknown.iter()).take(5) {
+            for inv in &owners.invalid {
                 println!(
                     "      {} {} ({})",
                     "•".red(),
                     inv.owner,
                     inv.reason.dimmed()
+                );
+            }
+        } else if !owners.unknown.is_empty() {
+            println!(
+                "  {} Owners (changed): {} unverified",
+                "⚠".yellow(),
+                owners.unknown.len().to_string().yellow()
+            );
+            for inv in owners.unknown.iter().take(5) {
+                println!(
+                    "      {} {} ({})",
+                    "•".yellow(),
+                    inv.owner,
+                    inv.reason.dimmed()
+                );
+            }
+            if owners.unknown.len() > 5 {
+                println!(
+                    "      {} ...and {} more",
+                    "•".dimmed(),
+                    owners.unknown.len() - 5
                 );
             }
         } else {
@@ -540,12 +570,17 @@ fn print_human_summary(results: &GhaResults) {
 
     // Owners (all)
     if let Some(ref owners) = results.owners_all {
-        let invalid_count = owners.invalid.len() + owners.unknown.len();
-        if invalid_count > 0 {
+        if !owners.invalid.is_empty() {
             println!(
                 "  {} Owners (all): {} invalid",
                 "⚠".yellow(),
-                invalid_count.to_string().yellow()
+                owners.invalid.len().to_string().yellow()
+            );
+        } else if !owners.unknown.is_empty() {
+            println!(
+                "  {} Owners (all): {} unverified",
+                "⚠".yellow(),
+                owners.unknown.len().to_string().yellow()
             );
         } else {
             println!(
@@ -713,11 +748,17 @@ fn classify_owners(owners: &HashSet<String>, client: &GitHubClient) -> OwnersRes
                 owner: owner.clone(),
                 reason: "not found on GitHub".to_string(),
             }),
-            Some(crate::github::OwnerInfo::Unknown) | None => {
+            Some(crate::github::OwnerInfo::Unknown(ref reason)) => {
+                unknown.push(InvalidOwner {
+                    owner: owner.clone(),
+                    reason: reason.clone(),
+                });
+            }
+            None => {
                 let reason = if owner.contains('@') && !owner.starts_with('@') {
                     "email, can't validate".to_string()
                 } else {
-                    "couldn't validate - check permissions".to_string()
+                    "owner not validated".to_string()
                 };
                 unknown.push(InvalidOwner {
                     owner: owner.clone(),
@@ -814,8 +855,14 @@ mod tests {
     #[test]
     fn test_classify_unknown_team_not_treated_as_invalid() {
         let client = make_client_with_cache(vec![
-            ("@surgeventures/team-zen", OwnerInfo::Unknown),
-            ("@surgeventures/tribe-growth", OwnerInfo::Unknown),
+            (
+                "@surgeventures/team-zen",
+                OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+            ),
+            (
+                "@surgeventures/tribe-growth",
+                OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+            ),
         ]);
         let owners: HashSet<String> = [
             "@surgeventures/team-zen".to_string(),
@@ -832,7 +879,7 @@ mod tests {
         );
         assert_eq!(result.unknown.len(), 2);
         for u in &result.unknown {
-            assert_eq!(u.reason, "couldn't validate - check permissions");
+            assert_eq!(u.reason, "team not found or token lacks read:org scope");
         }
     }
 
@@ -846,6 +893,7 @@ mod tests {
         assert!(result.invalid.is_empty());
         assert_eq!(result.unknown.len(), 1);
         assert_eq!(result.unknown[0].owner, "@org/uncached-team");
+        assert_eq!(result.unknown[0].reason, "owner not validated");
     }
 
     #[test]
@@ -865,7 +913,10 @@ mod tests {
         let client = make_client_with_cache(vec![
             ("@valid-user", user_info("valid-user")),
             ("@org/valid-team", team_info("org", "valid-team")),
-            ("@org/unknown-team", OwnerInfo::Unknown),
+            (
+                "@org/unknown-team",
+                OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+            ),
             ("@nonexistent", OwnerInfo::Invalid),
         ]);
         let owners: HashSet<String> = [
@@ -896,8 +947,14 @@ mod tests {
     fn test_only_invalid_causes_failure_not_unknown() {
         // Scenario: all owners are Unknown (team 404s) — should NOT fail
         let client = make_client_with_cache(vec![
-            ("@org/team-a", OwnerInfo::Unknown),
-            ("@org/team-b", OwnerInfo::Unknown),
+            (
+                "@org/team-a",
+                OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+            ),
+            (
+                "@org/team-b",
+                OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+            ),
         ]);
         let owners: HashSet<String> = ["@org/team-a".to_string(), "@org/team-b".to_string()].into();
         let result = classify_owners(&owners, &client);
@@ -908,7 +965,10 @@ mod tests {
 
         // Scenario: mix of unknown and one truly invalid — should fail
         let client = make_client_with_cache(vec![
-            ("@org/team-a", OwnerInfo::Unknown),
+            (
+                "@org/team-a",
+                OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+            ),
             ("@definitely-fake", OwnerInfo::Invalid),
         ]);
         let owners: HashSet<String> =

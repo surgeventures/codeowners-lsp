@@ -405,19 +405,8 @@ pub async fn add_github_diagnostics(
                     });
                 }
             }
-            Some(OwnerInfo::Unknown) => {
-                // Teams 404 as Unknown because GitHub hides team existence
-                // from tokens without read:org scope
+            Some(OwnerInfo::Unknown(ref reason)) => {
                 if let Some(severity) = unverified_severity {
-                    let is_team = owner.contains('/');
-                    let message = if is_team {
-                        format!(
-                            "Could not verify team '{}' — token may lack read:org scope",
-                            owner
-                        )
-                    } else {
-                        format!("Could not verify owner '{}' (rate limited or insufficient permissions)", owner)
-                    };
                     diagnostics.push(Diagnostic {
                         range,
                         severity: Some(severity),
@@ -425,7 +414,7 @@ pub async fn add_github_diagnostics(
                             codes::GITHUB_OWNER_UNVERIFIED.to_string(),
                         )),
                         source: Some("codeowners".to_string()),
-                        message,
+                        message: format!("Could not verify '{}': {}", owner, reason),
                         ..Default::default()
                     });
                 }
