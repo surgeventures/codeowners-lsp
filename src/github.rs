@@ -159,7 +159,7 @@ impl GitHubClient {
     }
 
     /// Create a client with a custom base URL (for testing)
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn with_base_url(base_url: &str) -> Self {
         Self {
             http_client: reqwest::Client::new(),
@@ -360,6 +360,16 @@ impl GitHubClient {
     #[allow(dead_code)] // Used by LSP, not CLI
     pub fn get_owner_info(&self, owner: &str) -> Option<OwnerInfo> {
         self.cache.read().unwrap().owners.get(owner).cloned()
+    }
+
+    /// Insert an entry into the cache (for testing)
+    #[doc(hidden)]
+    pub fn insert_cached(&self, owner: &str, info: OwnerInfo) {
+        self.cache
+            .write()
+            .unwrap()
+            .owners
+            .insert(owner.to_string(), info);
     }
 
     /// Clear the cache
@@ -660,6 +670,39 @@ mod tests {
         }
 
         assert_eq!(client.get_cached("@invalid_owner"), Some(false));
+    }
+
+    /// get_cached() is LOSSY: it collapses Unknown into Some(false), same as
+    /// Invalid. Code that needs to distinguish Unknown from Invalid MUST use
+    /// get_owner_info() instead. This test documents the lossy behavior so
+    /// nobody accidentally relies on get_cached() for classification.
+    #[test]
+    fn test_get_cached_is_lossy_for_unknown() {
+        let client = GitHubClient::new();
+
+        {
+            let mut cache = client.cache.write().unwrap();
+            cache
+                .owners
+                .insert("@org/unknown-team".to_string(), OwnerInfo::Unknown);
+            cache
+                .owners
+                .insert("@org/invalid-team".to_string(), OwnerInfo::Invalid);
+        }
+
+        // Both return Some(false) — INDISTINGUISHABLE via get_cached!
+        assert_eq!(client.get_cached("@org/unknown-team"), Some(false));
+        assert_eq!(client.get_cached("@org/invalid-team"), Some(false));
+
+        // get_owner_info() preserves the distinction
+        assert!(matches!(
+            client.get_owner_info("@org/unknown-team"),
+            Some(OwnerInfo::Unknown)
+        ));
+        assert!(matches!(
+            client.get_owner_info("@org/invalid-team"),
+            Some(OwnerInfo::Invalid)
+        ));
     }
 
     #[test]

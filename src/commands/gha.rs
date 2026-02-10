@@ -246,44 +246,8 @@ pub async fn gha(opts: GhaOptions) -> ExitCode {
             let _ = client.export_to_persistent().save(&repo_root);
         }
 
-        // Build results
-        let build_owners_result = |owners: &HashSet<String>| -> OwnersResult {
-            let mut valid = Vec::new();
-            let mut invalid = Vec::new();
-            let mut unknown = Vec::new();
-
-            for owner in owners {
-                match client.get_owner_info(owner) {
-                    Some(crate::github::OwnerInfo::User(_))
-                    | Some(crate::github::OwnerInfo::Team(_)) => valid.push(owner.clone()),
-                    Some(crate::github::OwnerInfo::Invalid) => invalid.push(InvalidOwner {
-                        owner: owner.clone(),
-                        reason: "not found on GitHub".to_string(),
-                    }),
-                    Some(crate::github::OwnerInfo::Unknown) | None => {
-                        let reason = if owner.contains('@') && !owner.starts_with('@') {
-                            "email, can't validate".to_string()
-                        } else {
-                            "couldn't validate - check permissions".to_string()
-                        };
-                        unknown.push(InvalidOwner {
-                            owner: owner.clone(),
-                            reason,
-                        });
-                    }
-                }
-            }
-
-            valid.sort();
-            invalid.sort_by(|a, b| a.owner.cmp(&b.owner));
-            unknown.sort_by(|a, b| a.owner.cmp(&b.owner));
-
-            OwnersResult {
-                valid,
-                invalid,
-                unknown,
-            }
-        };
+        let build_owners_result =
+            |owners: &HashSet<String>| -> OwnersResult { classify_owners(owners, &client) };
 
         // Changed files owners (enforced)
         if opts.check_owners_changed && opts.changed_files.is_some() {
@@ -732,4 +696,229 @@ fn build_step_summary(results: &GhaResults, failed: bool) -> String {
     }
 
     md
+}
+
+/// Classify a set of owners into valid/invalid/unknown based on cached GitHub info.
+fn classify_owners(owners: &HashSet<String>, client: &GitHubClient) -> OwnersResult {
+    let mut valid = Vec::new();
+    let mut invalid = Vec::new();
+    let mut unknown = Vec::new();
+
+    for owner in owners {
+        match client.get_owner_info(owner) {
+            Some(crate::github::OwnerInfo::User(_)) | Some(crate::github::OwnerInfo::Team(_)) => {
+                valid.push(owner.clone())
+            }
+            Some(crate::github::OwnerInfo::Invalid) => invalid.push(InvalidOwner {
+                owner: owner.clone(),
+                reason: "not found on GitHub".to_string(),
+            }),
+            Some(crate::github::OwnerInfo::Unknown) | None => {
+                let reason = if owner.contains('@') && !owner.starts_with('@') {
+                    "email, can't validate".to_string()
+                } else {
+                    "couldn't validate - check permissions".to_string()
+                };
+                unknown.push(InvalidOwner {
+                    owner: owner.clone(),
+                    reason,
+                });
+            }
+        }
+    }
+
+    valid.sort();
+    invalid.sort_by(|a, b| a.owner.cmp(&b.owner));
+    unknown.sort_by(|a, b| a.owner.cmp(&b.owner));
+
+    OwnersResult {
+        valid,
+        invalid,
+        unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::github::{GitHubClient, OwnerInfo, TeamInfo, UserInfo};
+
+    fn make_client_with_cache(entries: Vec<(&str, OwnerInfo)>) -> GitHubClient {
+        let client = GitHubClient::new();
+        for (owner, info) in entries {
+            client.insert_cached(owner, info);
+        }
+        client
+    }
+
+    fn user_info(login: &str) -> OwnerInfo {
+        OwnerInfo::User(UserInfo {
+            login: login.to_string(),
+            name: None,
+            html_url: format!("https://github.com/{login}"),
+            avatar_url: None,
+            bio: None,
+            company: None,
+        })
+    }
+
+    fn team_info(org: &str, slug: &str) -> OwnerInfo {
+        OwnerInfo::Team(TeamInfo {
+            slug: slug.to_string(),
+            name: slug.to_string(),
+            org: org.to_string(),
+            description: None,
+            html_url: format!("https://github.com/orgs/{org}/teams/{slug}"),
+            members_count: None,
+            repos_count: None,
+        })
+    }
+
+    #[test]
+    fn test_classify_valid_user() {
+        let client = make_client_with_cache(vec![("@alice", user_info("alice"))]);
+        let owners: HashSet<String> = ["@alice".to_string()].into();
+        let result = classify_owners(&owners, &client);
+
+        assert_eq!(result.valid, vec!["@alice"]);
+        assert!(result.invalid.is_empty());
+        assert!(result.unknown.is_empty());
+    }
+
+    #[test]
+    fn test_classify_valid_team() {
+        let client = make_client_with_cache(vec![("@myorg/myteam", team_info("myorg", "myteam"))]);
+        let owners: HashSet<String> = ["@myorg/myteam".to_string()].into();
+        let result = classify_owners(&owners, &client);
+
+        assert_eq!(result.valid, vec!["@myorg/myteam"]);
+        assert!(result.invalid.is_empty());
+        assert!(result.unknown.is_empty());
+    }
+
+    #[test]
+    fn test_classify_invalid_user() {
+        let client = make_client_with_cache(vec![("@ghost", OwnerInfo::Invalid)]);
+        let owners: HashSet<String> = ["@ghost".to_string()].into();
+        let result = classify_owners(&owners, &client);
+
+        assert!(result.valid.is_empty());
+        assert_eq!(result.invalid.len(), 1);
+        assert_eq!(result.invalid[0].owner, "@ghost");
+        assert_eq!(result.invalid[0].reason, "not found on GitHub");
+        assert!(result.unknown.is_empty());
+    }
+
+    /// This is THE critical test: team 404s are Unknown (ambiguous), not Invalid.
+    /// They must NOT appear in the invalid bucket or cause CI failures.
+    #[test]
+    fn test_classify_unknown_team_not_treated_as_invalid() {
+        let client = make_client_with_cache(vec![
+            ("@surgeventures/team-zen", OwnerInfo::Unknown),
+            ("@surgeventures/tribe-growth", OwnerInfo::Unknown),
+        ]);
+        let owners: HashSet<String> = [
+            "@surgeventures/team-zen".to_string(),
+            "@surgeventures/tribe-growth".to_string(),
+        ]
+        .into();
+        let result = classify_owners(&owners, &client);
+
+        // MUST be in unknown, NOT invalid
+        assert!(result.valid.is_empty());
+        assert!(
+            result.invalid.is_empty(),
+            "Unknown teams must not be classified as invalid"
+        );
+        assert_eq!(result.unknown.len(), 2);
+        for u in &result.unknown {
+            assert_eq!(u.reason, "couldn't validate - check permissions");
+        }
+    }
+
+    #[test]
+    fn test_classify_uncached_owner_goes_to_unknown() {
+        let client = GitHubClient::new(); // empty cache
+        let owners: HashSet<String> = ["@org/uncached-team".to_string()].into();
+        let result = classify_owners(&owners, &client);
+
+        assert!(result.valid.is_empty());
+        assert!(result.invalid.is_empty());
+        assert_eq!(result.unknown.len(), 1);
+        assert_eq!(result.unknown[0].owner, "@org/uncached-team");
+    }
+
+    #[test]
+    fn test_classify_email_gets_email_reason() {
+        let client = GitHubClient::new(); // emails can't be validated
+        let owners: HashSet<String> = ["user@example.com".to_string()].into();
+        let result = classify_owners(&owners, &client);
+
+        assert!(result.valid.is_empty());
+        assert!(result.invalid.is_empty());
+        assert_eq!(result.unknown.len(), 1);
+        assert_eq!(result.unknown[0].reason, "email, can't validate");
+    }
+
+    #[test]
+    fn test_classify_mixed_states() {
+        let client = make_client_with_cache(vec![
+            ("@valid-user", user_info("valid-user")),
+            ("@org/valid-team", team_info("org", "valid-team")),
+            ("@org/unknown-team", OwnerInfo::Unknown),
+            ("@nonexistent", OwnerInfo::Invalid),
+        ]);
+        let owners: HashSet<String> = [
+            "@valid-user".to_string(),
+            "@org/valid-team".to_string(),
+            "@org/unknown-team".to_string(),
+            "@nonexistent".to_string(),
+            "uncached@email.com".to_string(),
+        ]
+        .into();
+        let result = classify_owners(&owners, &client);
+
+        assert_eq!(result.valid.len(), 2);
+        assert!(result.valid.contains(&"@valid-user".to_string()));
+        assert!(result.valid.contains(&"@org/valid-team".to_string()));
+
+        assert_eq!(result.invalid.len(), 1);
+        assert_eq!(result.invalid[0].owner, "@nonexistent");
+
+        assert_eq!(result.unknown.len(), 2);
+        let unknown_owners: Vec<&str> = result.unknown.iter().map(|u| u.owner.as_str()).collect();
+        assert!(unknown_owners.contains(&"@org/unknown-team"));
+        assert!(unknown_owners.contains(&"uncached@email.com"));
+    }
+
+    /// Regression test: only invalid owners should cause CI failure, not unknown.
+    #[test]
+    fn test_only_invalid_causes_failure_not_unknown() {
+        // Scenario: all owners are Unknown (team 404s) — should NOT fail
+        let client = make_client_with_cache(vec![
+            ("@org/team-a", OwnerInfo::Unknown),
+            ("@org/team-b", OwnerInfo::Unknown),
+        ]);
+        let owners: HashSet<String> = ["@org/team-a".to_string(), "@org/team-b".to_string()].into();
+        let result = classify_owners(&owners, &client);
+        assert!(
+            result.invalid.is_empty(),
+            "No invalid owners means no CI failure"
+        );
+
+        // Scenario: mix of unknown and one truly invalid — should fail
+        let client = make_client_with_cache(vec![
+            ("@org/team-a", OwnerInfo::Unknown),
+            ("@definitely-fake", OwnerInfo::Invalid),
+        ]);
+        let owners: HashSet<String> =
+            ["@org/team-a".to_string(), "@definitely-fake".to_string()].into();
+        let result = classify_owners(&owners, &client);
+        assert_eq!(
+            result.invalid.len(),
+            1,
+            "One invalid should trigger failure"
+        );
+        assert_eq!(result.unknown.len(), 1, "Unknown should be separate");
+    }
 }

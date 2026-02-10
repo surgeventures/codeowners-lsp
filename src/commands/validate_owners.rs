@@ -241,3 +241,108 @@ async fn validate_single(client: &GitHubClient, owner: &str, token: &str) -> Val
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn test_validate_single_valid_user() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/alice"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "login": "alice",
+                "html_url": "https://github.com/alice"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = GitHubClient::with_base_url(&mock_server.uri());
+        let result = validate_single(&client, "@alice", "fake-token").await;
+        assert!(matches!(result, ValidationResult::Valid(ref o) if o == "@alice"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_single_invalid_user_404() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/users/nonexistent"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let client = GitHubClient::with_base_url(&mock_server.uri());
+        let result = validate_single(&client, "@nonexistent", "fake-token").await;
+        assert!(matches!(result, ValidationResult::Invalid(ref o, _) if o == "@nonexistent"));
+    }
+
+    /// Critical test: team 404 is ambiguous (could be invisible, not nonexistent).
+    /// Must classify as Unknown, not Invalid.
+    #[tokio::test]
+    async fn test_validate_single_team_404_is_unknown_not_invalid() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/orgs/surgeventures/teams/tribe-growth"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&mock_server)
+            .await;
+
+        let client = GitHubClient::with_base_url(&mock_server.uri());
+        let result = validate_single(&client, "@surgeventures/tribe-growth", "fake-token").await;
+
+        assert!(
+            matches!(result, ValidationResult::Unknown(..)),
+            "Team 404 must be Unknown, not Invalid. Got: {:?}",
+            result
+        );
+        if let ValidationResult::Unknown(owner, reason) = result {
+            assert_eq!(owner, "@surgeventures/tribe-growth");
+            assert!(reason.contains("check permissions"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_single_valid_team() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/orgs/myorg/teams/myteam"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "slug": "myteam",
+                "name": "My Team",
+                "html_url": "https://github.com/orgs/myorg/teams/myteam"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = GitHubClient::with_base_url(&mock_server.uri());
+        let result = validate_single(&client, "@myorg/myteam", "fake-token").await;
+        assert!(matches!(result, ValidationResult::Valid(ref o) if o == "@myorg/myteam"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_single_team_403_is_unknown() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/orgs/someorg/teams/private"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&mock_server)
+            .await;
+
+        let client = GitHubClient::with_base_url(&mock_server.uri());
+        let result = validate_single(&client, "@someorg/private", "fake-token").await;
+        assert!(matches!(result, ValidationResult::Unknown(..)));
+    }
+
+    #[tokio::test]
+    async fn test_validate_single_email_is_unknown() {
+        let client = GitHubClient::new();
+        let result = validate_single(&client, "user@example.com", "fake-token").await;
+        assert!(matches!(result, ValidationResult::Unknown(..)));
+        if let ValidationResult::Unknown(_, reason) = result {
+            assert!(reason.contains("email"));
+        }
+    }
+}
