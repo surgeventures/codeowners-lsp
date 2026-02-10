@@ -253,13 +253,14 @@ pub async fn gha(opts: GhaOptions) -> ExitCode {
             let mut unknown = Vec::new();
 
             for owner in owners {
-                match client.get_cached(owner) {
-                    Some(true) => valid.push(owner.clone()),
-                    Some(false) => invalid.push(InvalidOwner {
+                match client.get_owner_info(owner) {
+                    Some(crate::github::OwnerInfo::User(_))
+                    | Some(crate::github::OwnerInfo::Team(_)) => valid.push(owner.clone()),
+                    Some(crate::github::OwnerInfo::Invalid) => invalid.push(InvalidOwner {
                         owner: owner.clone(),
                         reason: "not found on GitHub".to_string(),
                     }),
-                    None => {
+                    Some(crate::github::OwnerInfo::Unknown) | None => {
                         let reason = if owner.contains('@') && !owner.starts_with('@') {
                             "email, can't validate".to_string()
                         } else {

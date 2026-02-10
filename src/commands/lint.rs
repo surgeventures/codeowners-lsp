@@ -288,7 +288,10 @@ async fn validate_owners_for_lint(
     let mut diagnostics = Vec::new();
 
     for (owner, line_num, char_start, owner_len) in owners_to_check {
-        if let Some(false) = client.get_cached(&owner) {
+        if matches!(
+            client.get_owner_info(&owner),
+            Some(crate::github::OwnerInfo::Invalid)
+        ) {
             diagnostics.push(Diagnostic {
                 range: Range {
                     start: Position {
