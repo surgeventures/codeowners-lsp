@@ -284,19 +284,29 @@ async fn validate_owners_for_lint(
         let _ = client.export_to_persistent().save(repo_root);
     }
 
-    // Generate diagnostics for invalid owners
+    owner_diagnostics_from_cache(&owners_to_check, &client)
+}
+
+/// Generate diagnostics for owners that are definitively Invalid (not Unknown).
+fn owner_diagnostics_from_cache(
+    owners_to_check: &[(String, u32, u32, u32)],
+    client: &GitHubClient,
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     for (owner, line_num, char_start, owner_len) in owners_to_check {
-        if let Some(false) = client.get_cached(&owner) {
+        if matches!(
+            client.get_owner_info(owner),
+            Some(crate::github::OwnerInfo::Invalid)
+        ) {
             diagnostics.push(Diagnostic {
                 range: Range {
                     start: Position {
-                        line: line_num,
-                        character: char_start,
+                        line: *line_num,
+                        character: *char_start,
                     },
                     end: Position {
-                        line: line_num,
+                        line: *line_num,
                         character: char_start + owner_len,
                     },
                 },
@@ -387,5 +397,134 @@ mod tests {
         ];
         assert!(!should_fail(&diags, false));
         assert!(should_fail(&diags, true));
+    }
+
+    // =========================================================================
+    // owner_diagnostics_from_cache tests
+    // =========================================================================
+
+    use crate::github::{GitHubClient, OwnerInfo, TeamInfo, UserInfo};
+
+    fn make_client_with_cache(entries: Vec<(&str, OwnerInfo)>) -> GitHubClient {
+        let client = GitHubClient::new();
+        for (owner, info) in entries {
+            client.insert_cached(owner, info);
+        }
+        client
+    }
+
+    #[test]
+    fn test_invalid_owner_generates_diagnostic() {
+        let client = make_client_with_cache(vec![("@ghost", OwnerInfo::Invalid)]);
+        let owners = vec![("@ghost".to_string(), 5, 10, 6)];
+        let diags = owner_diagnostics_from_cache(&owners, &client);
+
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].message, "Owner '@ghost' not found on GitHub");
+        assert!(matches!(
+            diags[0].severity,
+            Some(DiagnosticSeverity::WARNING)
+        ));
+        assert_eq!(diags[0].range.start.line, 5);
+        assert_eq!(diags[0].range.start.character, 10);
+    }
+
+    /// Critical regression test: Unknown teams (404 ambiguous) must NOT
+    /// generate "not found" diagnostics.
+    #[test]
+    fn test_unknown_team_does_not_generate_diagnostic() {
+        let client = make_client_with_cache(vec![(
+            "@org/invisible-team",
+            OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+        )]);
+        let owners = vec![("@org/invisible-team".to_string(), 3, 8, 19)];
+        let diags = owner_diagnostics_from_cache(&owners, &client);
+
+        assert!(
+            diags.is_empty(),
+            "Unknown teams must not produce diagnostics"
+        );
+    }
+
+    #[test]
+    fn test_valid_owner_does_not_generate_diagnostic() {
+        let client = make_client_with_cache(vec![(
+            "@alice",
+            OwnerInfo::User(UserInfo {
+                login: "alice".to_string(),
+                name: None,
+                html_url: "https://github.com/alice".to_string(),
+                avatar_url: None,
+                bio: None,
+                company: None,
+            }),
+        )]);
+        let owners = vec![("@alice".to_string(), 1, 5, 6)];
+        let diags = owner_diagnostics_from_cache(&owners, &client);
+
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn test_uncached_owner_does_not_generate_diagnostic() {
+        let client = GitHubClient::new(); // empty cache
+        let owners = vec![("@org/not-yet-checked".to_string(), 2, 10, 20)];
+        let diags = owner_diagnostics_from_cache(&owners, &client);
+
+        assert!(
+            diags.is_empty(),
+            "Uncached owners should not be flagged as invalid"
+        );
+    }
+
+    #[test]
+    fn test_mixed_cache_states_only_invalid_flagged() {
+        let client = make_client_with_cache(vec![
+            (
+                "@valid-user",
+                OwnerInfo::User(UserInfo {
+                    login: "valid-user".to_string(),
+                    name: None,
+                    html_url: "https://github.com/valid-user".to_string(),
+                    avatar_url: None,
+                    bio: None,
+                    company: None,
+                }),
+            ),
+            (
+                "@org/valid-team",
+                OwnerInfo::Team(TeamInfo {
+                    slug: "valid-team".to_string(),
+                    name: "Valid Team".to_string(),
+                    org: "org".to_string(),
+                    description: None,
+                    html_url: "https://github.com/orgs/org/teams/valid-team".to_string(),
+                    members_count: None,
+                    repos_count: None,
+                }),
+            ),
+            (
+                "@org/unknown-team",
+                OwnerInfo::Unknown("team not found or token lacks read:org scope".into()),
+            ),
+            ("@truly-gone", OwnerInfo::Invalid),
+        ]);
+
+        let owners = vec![
+            ("@valid-user".to_string(), 1, 10, 11),
+            ("@org/valid-team".to_string(), 2, 10, 15),
+            ("@org/unknown-team".to_string(), 3, 10, 17),
+            ("@truly-gone".to_string(), 4, 10, 11),
+            ("@not-cached".to_string(), 5, 10, 11),
+        ];
+        let diags = owner_diagnostics_from_cache(&owners, &client);
+
+        assert_eq!(
+            diags.len(),
+            1,
+            "Only the Invalid owner should generate a diagnostic"
+        );
+        assert_eq!(diags[0].message, "Owner '@truly-gone' not found on GitHub");
+        assert_eq!(diags[0].range.start.line, 4);
     }
 }

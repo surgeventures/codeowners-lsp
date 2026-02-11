@@ -37,8 +37,8 @@ pub enum OwnerInfo {
     Team(TeamInfo),
     /// Invalid owner (doesn't exist)
     Invalid,
-    /// Couldn't validate (no permission, rate limited, etc)
-    Unknown,
+    /// Couldn't validate (no permission, rate limited, network error, etc)
+    Unknown(String),
 }
 
 impl OwnerInfo {
@@ -159,7 +159,7 @@ impl GitHubClient {
     }
 
     /// Create a client with a custom base URL (for testing)
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn with_base_url(base_url: &str) -> Self {
         Self {
             http_client: reqwest::Client::new(),
@@ -204,7 +204,7 @@ impl GitHubClient {
     /// Fetch GitHub user info
     async fn fetch_user(&self, username: &str, token: &str) -> Option<OwnerInfo> {
         let url = format!("{}/users/{}", self.base_url, username);
-        let response = self
+        let response = match self
             .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", token))
@@ -212,7 +212,10 @@ impl GitHubClient {
             .header("Accept", "application/vnd.github+json")
             .send()
             .await
-            .ok()?;
+        {
+            Ok(r) => r,
+            Err(e) => return Some(OwnerInfo::Unknown(format!("network error: {e}"))),
+        };
 
         let status = response.status();
         if status.is_success() {
@@ -228,15 +231,20 @@ impl GitHubClient {
             }
         } else if status.as_u16() == 404 {
             return Some(OwnerInfo::Invalid);
+        } else if status.as_u16() == 429 {
+            return Some(OwnerInfo::Unknown("rate limit exceeded".to_string()));
+        } else if status.as_u16() == 403 {
+            return Some(OwnerInfo::Unknown(
+                "forbidden - check token permissions".to_string(),
+            ));
         }
-        // 403, rate limit, network error -> Unknown
-        Some(OwnerInfo::Unknown)
+        Some(OwnerInfo::Unknown(format!("HTTP {status}")))
     }
 
     /// Fetch GitHub team info
     async fn fetch_team(&self, org: &str, team_slug: &str, token: &str) -> Option<OwnerInfo> {
         let url = format!("{}/orgs/{}/teams/{}", self.base_url, org, team_slug);
-        let response = self
+        let response = match self
             .http_client
             .get(&url)
             .header("Authorization", format!("Bearer {}", token))
@@ -244,7 +252,10 @@ impl GitHubClient {
             .header("Accept", "application/vnd.github+json")
             .send()
             .await
-            .ok()?;
+        {
+            Ok(r) => r,
+            Err(e) => return Some(OwnerInfo::Unknown(format!("network error: {e}"))),
+        };
 
         let status = response.status();
         if status.is_success() {
@@ -260,10 +271,21 @@ impl GitHubClient {
                 }));
             }
         } else if status.as_u16() == 404 {
-            return Some(OwnerInfo::Invalid);
+            // GitHub returns 404 for both "team doesn't exist" AND "team exists
+            // but token lacks visibility" (no read:org scope). Unlike /users/
+            // which is public, we can't distinguish these cases, so treat as
+            // Unknown rather than Invalid to avoid false positives.
+            return Some(OwnerInfo::Unknown(
+                "team not found or token lacks read:org scope".to_string(),
+            ));
+        } else if status.as_u16() == 429 {
+            return Some(OwnerInfo::Unknown("rate limit exceeded".to_string()));
+        } else if status.as_u16() == 403 {
+            return Some(OwnerInfo::Unknown(
+                "forbidden - check token permissions".to_string(),
+            ));
         }
-        // 403 = no permission, treat as unknown (might be valid, just can't see)
-        Some(OwnerInfo::Unknown)
+        Some(OwnerInfo::Unknown(format!("HTTP {status}")))
     }
 
     /// Validate a GitHub user exists (returns bool for backwards compat)
@@ -331,7 +353,7 @@ impl GitHubClient {
         match info {
             OwnerInfo::User(_) | OwnerInfo::Team(_) => Some(true),
             OwnerInfo::Invalid => Some(false),
-            OwnerInfo::Unknown => None,
+            OwnerInfo::Unknown(_) => None,
         }
     }
 
@@ -356,6 +378,16 @@ impl GitHubClient {
     #[allow(dead_code)] // Used by LSP, not CLI
     pub fn get_owner_info(&self, owner: &str) -> Option<OwnerInfo> {
         self.cache.read().unwrap().owners.get(owner).cloned()
+    }
+
+    /// Insert an entry into the cache (for testing)
+    #[doc(hidden)]
+    pub fn insert_cached(&self, owner: &str, info: OwnerInfo) {
+        self.cache
+            .write()
+            .unwrap()
+            .owners
+            .insert(owner.to_string(), info);
     }
 
     /// Clear the cache
@@ -441,7 +473,7 @@ mod tests {
         assert!(!invalid.is_valid());
         assert!(invalid.is_invalid());
 
-        let unknown = OwnerInfo::Unknown;
+        let unknown = OwnerInfo::Unknown("test".into());
         assert!(!unknown.is_valid());
         assert!(!unknown.is_invalid());
     }
@@ -579,7 +611,7 @@ mod tests {
                 .insert("@invalid".to_string(), OwnerInfo::Invalid);
             cache
                 .owners
-                .insert("@unknown".to_string(), OwnerInfo::Unknown);
+                .insert("@unknown".to_string(), OwnerInfo::Unknown("test".into()));
         }
 
         let cached = client.get_cached_owners();
@@ -658,6 +690,40 @@ mod tests {
         assert_eq!(client.get_cached("@invalid_owner"), Some(false));
     }
 
+    /// get_cached() is LOSSY: it collapses Unknown into Some(false), same as
+    /// Invalid. Code that needs to distinguish Unknown from Invalid MUST use
+    /// get_owner_info() instead. This test documents the lossy behavior so
+    /// nobody accidentally relies on get_cached() for classification.
+    #[test]
+    fn test_get_cached_is_lossy_for_unknown() {
+        let client = GitHubClient::new();
+
+        {
+            let mut cache = client.cache.write().unwrap();
+            cache.owners.insert(
+                "@org/unknown-team".to_string(),
+                OwnerInfo::Unknown("test".into()),
+            );
+            cache
+                .owners
+                .insert("@org/invalid-team".to_string(), OwnerInfo::Invalid);
+        }
+
+        // Both return Some(false) — INDISTINGUISHABLE via get_cached!
+        assert_eq!(client.get_cached("@org/unknown-team"), Some(false));
+        assert_eq!(client.get_cached("@org/invalid-team"), Some(false));
+
+        // get_owner_info() preserves the distinction
+        assert!(matches!(
+            client.get_owner_info("@org/unknown-team"),
+            Some(OwnerInfo::Unknown(_))
+        ));
+        assert!(matches!(
+            client.get_owner_info("@org/invalid-team"),
+            Some(OwnerInfo::Invalid)
+        ));
+    }
+
     #[test]
     fn test_owner_info_serialization() {
         // Test that OwnerInfo can be serialized/deserialized correctly
@@ -699,10 +765,10 @@ mod tests {
         let deserialized: OwnerInfo = serde_json::from_str(&json).unwrap();
         assert!(matches!(deserialized, OwnerInfo::Invalid));
 
-        let unknown = OwnerInfo::Unknown;
+        let unknown = OwnerInfo::Unknown("rate limit exceeded".into());
         let json = serde_json::to_string(&unknown).unwrap();
         let deserialized: OwnerInfo = serde_json::from_str(&json).unwrap();
-        assert!(matches!(deserialized, OwnerInfo::Unknown));
+        assert!(matches!(deserialized, OwnerInfo::Unknown(ref r) if r == "rate limit exceeded"));
     }
 
     #[test]
@@ -822,7 +888,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_team_not_found() {
+    async fn test_fetch_team_not_found_is_unknown() {
+        // Team 404 is ambiguous (could be invisible, not nonexistent),
+        // so it should return Unknown (None), not Invalid (Some(false))
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
@@ -836,7 +904,12 @@ mod tests {
             .validate_owner("@myorg/nonexistent", "fake-token")
             .await;
 
-        assert_eq!(result, Some(false));
+        // 404 on teams = Unknown, not Invalid
+        assert_eq!(result, None);
+
+        // Should be cached as Unknown with reason
+        let info = client.get_owner_info("@myorg/nonexistent").unwrap();
+        assert!(matches!(info, OwnerInfo::Unknown(ref r) if r.contains("read:org")));
     }
 
     #[tokio::test]
@@ -1023,7 +1096,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_team_not_found() {
+    async fn test_validate_team_not_found_is_unknown() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("GET"))
@@ -1037,7 +1110,8 @@ mod tests {
             .validate_team("someorg", "notfoundteam", "fake-token")
             .await;
 
-        assert_eq!(result, Some(false));
+        // Team 404 is ambiguous — returns None (Unknown)
+        assert_eq!(result, None);
     }
 
     #[tokio::test]

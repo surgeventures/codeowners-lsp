@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use tower_lsp::lsp_types::*;
 
 use crate::file_cache::FileCache;
-use crate::github::GitHubClient;
+use crate::github::{GitHubClient, OwnerInfo};
 use crate::parser::{parse_codeowners_file_with_positions, CodeownersLine, ParsedLine};
 use crate::pattern::pattern_subsumes;
 use crate::validation::{validate_owner, validate_pattern};
@@ -19,6 +19,8 @@ pub mod codes {
 
     #[allow(dead_code)] // Used by LSP only
     pub const GITHUB_OWNER_NOT_FOUND: &str = "github-owner-not-found";
+    #[allow(dead_code)] // Used by LSP only
+    pub const GITHUB_OWNER_UNVERIFIED: &str = "github-owner-unverified";
     #[allow(dead_code)] // Used by LSP only
     pub const FILE_NOT_OWNED: &str = "file-not-owned";
 }
@@ -369,32 +371,55 @@ pub async fn add_github_diagnostics(
     token: &str,
     config: &DiagnosticConfig,
 ) {
-    let Some(severity) = config.get(codes::GITHUB_OWNER_NOT_FOUND, DiagnosticSeverity::WARNING)
-    else {
-        return; // Disabled
-    };
+    let not_found_severity = config.get(codes::GITHUB_OWNER_NOT_FOUND, DiagnosticSeverity::WARNING);
+    let unverified_severity = config.get(codes::GITHUB_OWNER_UNVERIFIED, DiagnosticSeverity::HINT);
+
+    if not_found_severity.is_none() && unverified_severity.is_none() {
+        return; // Both disabled
+    }
 
     for (line_number, owner_offset, owner, owner_len) in owners_to_validate {
-        if let Some(false) = github_client.validate_owner(&owner, token).await {
-            diagnostics.push(Diagnostic {
-                range: Range {
-                    start: Position {
-                        line: line_number,
-                        character: owner_offset,
-                    },
-                    end: Position {
-                        line: line_number,
-                        character: owner_offset + owner_len,
-                    },
-                },
-                severity: Some(severity),
-                code: Some(NumberOrString::String(
-                    codes::GITHUB_OWNER_NOT_FOUND.to_string(),
-                )),
-                source: Some("codeowners".to_string()),
-                message: format!("Owner '{}' not found on GitHub", owner),
-                ..Default::default()
-            });
+        let range = Range {
+            start: Position {
+                line: line_number,
+                character: owner_offset,
+            },
+            end: Position {
+                line: line_number,
+                character: owner_offset + owner_len,
+            },
+        };
+
+        match github_client.validate_owner_with_info(&owner, token).await {
+            Some(OwnerInfo::Invalid) => {
+                if let Some(severity) = not_found_severity {
+                    diagnostics.push(Diagnostic {
+                        range,
+                        severity: Some(severity),
+                        code: Some(NumberOrString::String(
+                            codes::GITHUB_OWNER_NOT_FOUND.to_string(),
+                        )),
+                        source: Some("codeowners".to_string()),
+                        message: format!("Owner '{}' not found on GitHub", owner),
+                        ..Default::default()
+                    });
+                }
+            }
+            Some(OwnerInfo::Unknown(ref reason)) => {
+                if let Some(severity) = unverified_severity {
+                    diagnostics.push(Diagnostic {
+                        range,
+                        severity: Some(severity),
+                        code: Some(NumberOrString::String(
+                            codes::GITHUB_OWNER_UNVERIFIED.to_string(),
+                        )),
+                        source: Some("codeowners".to_string()),
+                        message: format!("Could not verify '{}': {}", owner, reason),
+                        ..Default::default()
+                    });
+                }
+            }
+            _ => {} // Valid or network failure — skip
         }
     }
 }
@@ -794,6 +819,7 @@ src/apps/foo/priv/gettext/ @team2
         assert_eq!(codes::SHADOWED_RULE, "shadowed-rule");
         assert_eq!(codes::NO_OWNERS, "no-owners");
         assert_eq!(codes::GITHUB_OWNER_NOT_FOUND, "github-owner-not-found");
+        assert_eq!(codes::GITHUB_OWNER_UNVERIFIED, "github-owner-unverified");
         assert_eq!(codes::FILE_NOT_OWNED, "file-not-owned");
     }
 
