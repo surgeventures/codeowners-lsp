@@ -2016,8 +2016,8 @@ impl LanguageServer for Backend {
                         ));
                         // Snippet: dir/** with owner placeholder
                         items.push(make_snippet(
-                            format!("{}** @...", &path),
-                            format!("{}** ${{1:@owner}}", &path),
+                            format!("{}** @...", path),
+                            format!("{}** ${{1:@owner}}", path),
                             CompletionItemKind::SNIPPET,
                             "Directory rule with owner".to_string(),
                         ));
@@ -2029,8 +2029,8 @@ impl LanguageServer for Backend {
                             "File".to_string(),
                         ));
                         items.push(make_snippet(
-                            format!("{} @...", &path),
-                            format!("{} ${{1:@owner}}", &path),
+                            format!("{} @...", path),
+                            format!("{} ${{1:@owner}}", path),
                             CompletionItemKind::SNIPPET,
                             "File rule with owner".to_string(),
                         ));
